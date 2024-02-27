@@ -1,0 +1,17 @@
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+.DS_Store
+*.test
+*.out
+.idea
+out
+gen
+.vscode
+*.log
+*.zip
+*.swp
+*.swo
+data
