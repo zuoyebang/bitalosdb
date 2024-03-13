@@ -398,7 +398,7 @@ func finishInitializingIter(d *DB, buf *iterAlloc) *Iterator {
 	}
 
 	if numMergingLevels > cap(mlevels) {
-		mlevels = make([]mergingIterLevel, numMergingLevels)
+		mlevels = make([]mergingIterLevel, 0, numMergingLevels)
 	}
 
 	if batch != nil {
