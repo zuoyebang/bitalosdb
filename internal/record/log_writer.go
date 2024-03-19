@@ -335,11 +335,6 @@ func (w *LogWriter) SetMinSyncInterval(minSyncInterval durationFunc) {
 	f.Unlock()
 }
 
-// flushLoop 是一个单独的 Goroutine，它启动后将 Loop 等待 flusher.ready 的通知唤醒后检查满足一下三个条件之一时开始工作：
-//
-// 1.有在 flusher.pending 中待 flush 的 block
-// 2.有当前 flusher.block 有未 flush 的数据
-// 3.距离上次 sync 满足了 minSyncInterval，且有 sync 请求在 flusher.syncQ 中
 func (w *LogWriter) flushLoop(context.Context) {
 	f := &w.flusher
 	f.Lock()
