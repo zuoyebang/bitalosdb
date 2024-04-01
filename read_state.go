@@ -35,15 +35,6 @@ func (s *readState) unref() {
 	}
 }
 
-func (s *readState) unrefLocked() {
-	if atomic.AddInt32(&s.refcnt, -1) != 0 {
-		return
-	}
-	for _, mem := range s.memtables {
-		mem.readerUnref()
-	}
-}
-
 func (d *DB) loadReadState() *readState {
 	d.readState.RLock()
 	state := d.readState.val
@@ -69,6 +60,6 @@ func (d *DB) updateReadStateLocked() {
 	d.readState.Unlock()
 
 	if old != nil {
-		old.unrefLocked()
+		old.unref()
 	}
 }
