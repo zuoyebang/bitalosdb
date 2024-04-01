@@ -401,6 +401,10 @@ func (t *Bitree) BitreeDebugInfo(dataType string) string {
 		)
 	}
 
+	if t.opts.UseBlockCompress {
+		fmt.Fprintf(buf, "%s-bitpage%d-blockCache: %s\n", dataType, t.index, t.bpage.GetCacheMetrics())
+	}
+
 	return buf.String()
 }
 
