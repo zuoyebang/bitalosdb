@@ -28,7 +28,7 @@ import (
 )
 
 const (
-	maxHeight   = 18
+	maxHeight   = 20
 	maxNodeSize = int(unsafe.Sizeof(node{}))
 	linksSize   = int(unsafe.Sizeof(links{}))
 	pValue      = 1 / math.E
