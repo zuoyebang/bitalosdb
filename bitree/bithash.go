@@ -20,7 +20,6 @@ import (
 
 	"github.com/zuoyebang/bitalosdb/bithash"
 	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/consts"
 	"github.com/zuoyebang/bitalosdb/internal/hash"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 )
@@ -56,20 +55,14 @@ func (t *Bitree) BithashDebugInfo(dataType string) string {
 	return t.bhash.DebugInfo(dataType)
 }
 
-func (t *Bitree) CompactBithash(jobId int, deletePercent float64) {
+func (t *Bitree) CompactBithash(deletePercent float64) {
 	if t.bhash == nil {
 		return
 	}
 
-	logTag := fmt.Sprintf("[COMPACTBITHASH %d] [tree:%d]", jobId, t.index)
+	logTag := fmt.Sprintf("[COMPACTBITHASH %d]", t.index)
 
-	curHourStamp := uint64(time.Now().Unix()) / consts.BithashCompactInterval
-	if curHourStamp == t.lastCompactBithashTime {
-		t.opts.Logger.Infof("%s compact bithash can not twice in the same half-hour current hour:%d", logTag, curHourStamp)
-		return
-	}
-
-	delFiles := t.bhash.CheckFilesDelPercent(jobId, deletePercent)
+	delFiles := t.bhash.CheckFilesDelPercent(deletePercent)
 	delFilesNum := len(delFiles)
 	if delFilesNum > 1 {
 		var remainPercent float64
@@ -92,7 +85,7 @@ func (t *Bitree) CompactBithash(jobId int, deletePercent float64) {
 		}
 	}
 
-	miniFiles := t.bhash.CheckFilesMiniSize(jobId)
+	miniFiles := t.bhash.CheckFilesMiniSize()
 	miniFilesNum := len(miniFiles)
 	if miniFilesNum > 1 {
 		var remainSize int64
@@ -168,8 +161,8 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 			}
 		}()
 
-		findKey := func(iterKey *base.InternalKey) bool {
-			v, vexist, vcloser := t.getInternal(iterKey.UserKey, hash.Crc32(iterKey.UserKey))
+		findKey := func(iterKey *base.InternalKey, khash uint32) bool {
+			v, vexist, vcloser := t.getInternal(iterKey.UserKey, khash)
 			if !vexist {
 				return false
 			}
@@ -184,12 +177,14 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 				delFnMap[fn] = true
 			}
 
-			if !findKey(ik) {
+			khash := hash.Crc32(ik.UserKey)
+
+			if !findKey(ik, khash) {
 				delKeyNum++
 				continue
 			}
 
-			if e = bw.AddIkey(ik, v, fn); e != nil {
+			if e = bw.AddIkey(ik, v, khash, fn); e != nil {
 				t.opts.Logger.Errorf("%s compactFile AddIkey fail ikey:%s keyFn:%d dstFn:%d err:%s", logTag, ik.String(), fn, dstFn, e)
 				return
 			}
@@ -242,8 +237,6 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 			t.bhash.StatsSetDelKeyTotal(0)
 		}
 	}
-
-	t.lastCompactBithashTime = uint64(time.Now().Unix()) / consts.BithashCompactInterval
 
 	t.opts.Logger.Infof("%s compact %v to %d success delKey:%d delKeyTotalOld:%d delKeyTotalNew:%d",
 		logTag, obsoleteFileNums, dstFn, delKeyTotal, delKeyTotalOld, int(t.bhash.StatsGetDelKeyTotal()))

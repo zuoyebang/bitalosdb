@@ -17,8 +17,6 @@ package bitpage
 import (
 	"bytes"
 	"errors"
-
-	"github.com/zuoyebang/bitalosdb/internal/base"
 )
 
 type compactionIter struct {
@@ -69,7 +67,7 @@ func (i *compactionIter) Next() (*internalKey, []byte) {
 	i.valid = false
 	for i.iterKey != nil {
 		switch i.iterKey.Kind() {
-		case base.InternalKeyKindDelete, base.InternalKeyKindSet:
+		case internalKeyKindSet, internalKeyKindDelete, internalKeyKindPrefixDelete:
 			i.saveKey()
 			i.value = i.iterValue
 			i.valid = true
@@ -124,7 +122,7 @@ func (i *compactionIter) nextInStripe() stripeChangeType {
 		return newStripe
 	}
 
-	if key.Kind() == base.InternalKeyKindInvalid {
+	if key.Kind() == internalKeyKindInvalid {
 		return sameStripeNonSkippable
 	}
 

@@ -20,12 +20,13 @@ import (
 	"github.com/zuoyebang/bitalosdb/bitpage"
 	"github.com/zuoyebang/bitalosdb/bitree/bdb"
 	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 )
 
 type BitreeIterator struct {
 	btree      *Bitree
-	ops        *base.IterOptions
+	ops        *options.IterOptions
 	cmp        base.Compare
 	compact    bool
 	err        error
@@ -46,7 +47,12 @@ func (i *BitreeIterator) getKV() (*base.InternalKey, []byte) {
 		return nil, nil
 	}
 
-	if i.compact || i.iterKey.Kind() == base.InternalKeyKindDelete {
+	if i.compact {
+		return i.iterKey, i.iterValue
+	}
+
+	switch i.iterKey.Kind() {
+	case base.InternalKeyKindDelete, base.InternalKeyKindPrefixDelete:
 		return i.iterKey, i.iterValue
 	}
 

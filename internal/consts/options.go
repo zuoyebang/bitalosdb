@@ -14,40 +14,40 @@
 
 package consts
 
-import (
-	"path/filepath"
-	"strconv"
-)
-
 const (
-	BitableCacheSize                   int64 = 1 << 30
-	BitableMemTableSize                int   = 64 << 20
-	BitableMemTableStopWritesThreshold int   = 8
-	BitableL0FileSize                  int64 = 256 << 20
-	BitableL0CompactionFileThreshold   int   = 2
-	BitableL0CompactionThreshold       int   = 2
-	BitableL0StopWritesThreshold       int   = 128
-	BitableLBaseMaxBytes               int64 = 1 << 30
-	BitableMaxOpenFiles                int   = 5000
-)
-
-const (
-	DefaultBytesPerSync                int   = 512 << 10
-	DefaultMemTableSize                int   = 128 << 20
+	DefaultBytesPerSync                int   = 1 << 20
+	DefaultMemTableSize                int   = 512 << 20
 	DefaultMemTableStopWritesThreshold int   = 8
 	DefaultCacheSize                   int64 = 128 << 20
-	DefaultLruCacheShards              int   = 36
+	DefaultLruCacheShards              int   = 64
 	DefaultLruCacheHashSize            int   = 8 * 1024 * DefaultLruCacheShards
 	DefaultLfuCacheShards              int   = 256
+	DefaultBitowerNum                  int   = 8
+	DefaultBitowerNumMask              int   = DefaultBitowerNum - 1
 )
 
 const (
-	BdbInitialSize int = 64 << 20
-	BdbPageSize    int = 4 << 10
-	BdbAllocSize   int = 16 << 20
+	MaxKeySize                    int   = 62 << 10
+	KvSeparateSize                int   = 256
+	BithashTableMaxSize           int   = 512 << 20
+	CompactToBitableCiMaxSize     int   = 512 << 20
+	UseBitableBitreeMaxSize       int64 = 24 << 30
+	UseBitableForceCompactMaxSize int64 = 16 << 30
+	BufioWriterBufSize            int   = 256 << 10
+)
 
-	BdbFreelistArrayType = "array"
-	BdbFreelistMapType   = "hashmap"
+const (
+	IterSlowCountThreshold         = 1280
+	IterReadAmplificationThreshold = 1280
+	DefaultDeletePercent           = 0.4
+	MinCompactInterval             = 360
+	DefaultCompactInterval         = 720
+	DeletionFileInterval           = 4
+)
+
+const (
+	CacheTypeLru int = 1 + iota
+	CacheTypeLfu
 )
 
 const (
@@ -62,52 +62,36 @@ const (
 )
 
 const (
-	BitpageLruCacheShards     int    = 8
-	BitpageBlockCacheSize     int64  = 800 << 20
-	BitpageBlockSize          uint32 = 32 << 10
-	BitpageBlockCacheHashSize int    = 24 << 10
-	BitpageBlockMinItemCount  int    = 40
-	BitpageFlushSize          uint64 = 256 << 20
-	BitpageSplitSize          uint64 = 592 << 20
-	BitpageSplitNum           int    = 3
-	BitpageInitMmapSize       int    = 2 << 30
+	BdbInitialSize int = 64 << 20
+	BdbPageSize    int = 4 << 10
+	BdbAllocSize   int = 16 << 20
+
+	BdbFreelistArrayType = "array"
+	BdbFreelistMapType   = "hashmap"
 )
 
 const (
-	MaxKeySize                    int   = 62 << 10
-	KvSeparateSize                int   = 256
-	BithashTableMaxSize           int   = 512 << 20
-	CompactToBitableCiMaxSize     int   = 512 << 20
-	UseBitableBitreeMaxSize       int64 = 24 << 30
-	UseBitableForceCompactMaxSize int64 = 16 << 30
-	BufioWriterBufSize            int   = 256 << 10
+	BitpageBlockCacheShards      int    = 16
+	BitpageDefaultBlockCacheSize int64  = 1 << 30
+	BitpageBlockSize             uint32 = 32 << 10
+	BitpageBlockCacheHashSize    int    = 24 << 10
+	BitpageBlockMinItemCount     int    = 40
+	BitpageFlushSize             uint64 = 256 << 20
+	BitpageSplitSize             uint64 = 592 << 20
+	BitpageSplitNum              int    = 3
+	BitpageInitMmapSize          int    = 4 << 30
 )
 
 const (
-	BitforestDefaultTreeNum      int = 8
-	BitforestDefaultFlushBufSize int = 16 << 10
-)
-
-const (
-	IterSlowCountThreshold         = 10000
-	IterReadAmplificationThreshold = 10000
-	DefaultDeletePercent           = 0.4
-	MinCompactInterval             = 300
-	DefaultCompactInterval         = 900
-	BithashCompactInterval         = 1800
-	DeletionFileInterval           = 4
-)
-
-const (
-	CacheTypeLru int = 1 + iota
-	CacheTypeLfu
-)
-
-const (
-	BitreeFilePrefix  = "bitree."
-	BitpageFilePrefix = "bitpage."
-	BithashPathPrefix = "bithash."
-	BitablePathPrefix = "bitable."
+	BitableCacheSize                   int64 = 1 << 30
+	BitableMemTableSize                int   = 64 << 20
+	BitableMemTableStopWritesThreshold int   = 8
+	BitableL0FileSize                  int64 = 256 << 20
+	BitableL0CompactionFileThreshold   int   = 2
+	BitableL0CompactionThreshold       int   = 2
+	BitableL0StopWritesThreshold       int   = 128
+	BitableLBaseMaxBytes               int64 = 1 << 30
+	BitableMaxOpenFiles                int   = 5000
 )
 
 const FileMode = 0600
@@ -116,22 +100,6 @@ var (
 	BdbBucketName = []byte("brt")
 	BdbMaxKey     = []byte{0xff, 0xff, 0xff, 0xff}
 )
-
-func MakeBitreeFilePath(dir string, i int) string {
-	return filepath.Join(dir, BitreeFilePrefix+strconv.Itoa(i))
-}
-
-func MakeBitpagePath(dir string, i int) string {
-	return filepath.Join(dir, BitpageFilePrefix+strconv.Itoa(i))
-}
-
-func MakeBithashPath(dir string, i int) string {
-	return filepath.Join(dir, BithashPathPrefix+strconv.Itoa(i))
-}
-
-func MakeBitablePath(dir string, i int) string {
-	return filepath.Join(dir, BitablePathPrefix+strconv.Itoa(i))
-}
 
 func CheckFlushDelPercent(delPercent float64, inuse, size uint64) bool {
 	if (delPercent > FlushDelPercentL1 && inuse > size/2) ||

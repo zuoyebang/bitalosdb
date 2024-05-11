@@ -16,6 +16,7 @@ package base
 
 import (
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -31,7 +32,17 @@ type FileType int
 const (
 	FileTypeLog FileType = iota
 	FileTypeLock
+	FileTypeManifest
+	FileTypeCurrent
 	FileTypeMeta
+)
+
+const (
+	BitreeFilePrefix  = "bitree."
+	BitpageFilePrefix = "bitpage."
+	BithashPathPrefix = "bithash."
+	BitablePathPrefix = "bitable."
+	WalPathPrefix     = "wal."
 )
 
 func MakeFilename(fileType FileType, fileNum FileNum) string {
@@ -40,8 +51,12 @@ func MakeFilename(fileType FileType, fileNum FileNum) string {
 		return fmt.Sprintf("%s.log", fileNum)
 	case FileTypeLock:
 		return "LOCK"
+	case FileTypeManifest:
+		return fmt.Sprintf("MANIFEST-%s", fileNum)
 	case FileTypeMeta:
 		return "BITALOSMETA"
+	case FileTypeCurrent:
+		return "CURRENT"
 	}
 	panic("unreachable")
 }
@@ -50,13 +65,41 @@ func MakeFilepath(fs vfs.FS, dirname string, fileType FileType, fileNum FileNum)
 	return fs.PathJoin(dirname, MakeFilename(fileType, fileNum))
 }
 
+func MakeBitreeFilepath(dir string, i int) string {
+	return filepath.Join(dir, BitreeFilePrefix+strconv.Itoa(i))
+}
+
+func MakeBitpagepath(dir string, i int) string {
+	return filepath.Join(dir, BitpageFilePrefix+strconv.Itoa(i))
+}
+
+func MakeBithashpath(dir string, i int) string {
+	return filepath.Join(dir, BithashPathPrefix+strconv.Itoa(i))
+}
+
+func MakeBitablepath(dir string, i int) string {
+	return filepath.Join(dir, BitablePathPrefix+strconv.Itoa(i))
+}
+
+func MakeWalpath(dir string, i int) string {
+	return filepath.Join(dir, WalPathPrefix+strconv.Itoa(i))
+}
+
 func ParseFilename(fs vfs.FS, filename string) (fileType FileType, fileNum FileNum, ok bool) {
 	filename = fs.PathBase(filename)
 	switch {
+	case filename == "CURRENT":
+		return FileTypeCurrent, 0, true
 	case filename == "LOCK":
 		return FileTypeLock, 0, true
 	case filename == "BITALOSMETA":
 		return FileTypeMeta, 0, true
+	case strings.HasPrefix(filename, "MANIFEST-"):
+		fileNum, ok = parseFileNum(filename[len("MANIFEST-"):])
+		if !ok {
+			break
+		}
+		return FileTypeManifest, fileNum, true
 	default:
 		i := strings.IndexByte(filename, '.')
 		if i < 0 {

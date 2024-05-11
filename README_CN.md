@@ -76,4 +76,4 @@ Cache：disable
 
 ## 文档
 
-- 技术架构及文档，参考官网：[bitalos.zuoyebang.com](https://bitalos.zuoyebang.com)
+- 技术架构及文档，参考官网：bitalos.zuoyebang.com（建设中...）

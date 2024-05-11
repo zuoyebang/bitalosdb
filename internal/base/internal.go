@@ -17,8 +17,6 @@ package base
 import (
 	"encoding/binary"
 	"fmt"
-	"strconv"
-	"strings"
 
 	"github.com/zuoyebang/bitalosdb/internal/bytepools"
 )
@@ -26,22 +24,25 @@ import (
 type InternalKeyKind uint8
 
 const (
-	InternalKeyKindDelete     InternalKeyKind = 0
-	InternalKeyKindSet        InternalKeyKind = 1
-	InternalKeyKindSetBithash InternalKeyKind = 2
-	InternalKeyKindLogData    InternalKeyKind = 3
-	InternalKeyKindMax        InternalKeyKind = 18
-	InternalKeyKindInvalid    InternalKeyKind = 255
-	InternalKeySeqNumBatch                    = uint64(1 << 55)
-	InternalKeySeqNumMax                      = uint64(1<<56 - 1)
+	InternalKeyKindDelete       InternalKeyKind = 0
+	InternalKeyKindSet          InternalKeyKind = 1
+	InternalKeyKindSetBithash   InternalKeyKind = 2
+	InternalKeyKindLogData      InternalKeyKind = 3
+	InternalKeyKindPrefixDelete InternalKeyKind = 4
+	InternalKeyKindMax          InternalKeyKind = 18
+	InternalKeyKindInvalid      InternalKeyKind = 255
+
+	InternalKeySeqNumBatch = uint64(1 << 55)
+	InternalKeySeqNumMax   = uint64(1<<56 - 1)
 )
 
 var internalKeyKindNames = []string{
-	InternalKeyKindDelete:     "DEL",
-	InternalKeyKindSet:        "SET",
-	InternalKeyKindSetBithash: "SETBITHASH",
-	InternalKeyKindLogData:    "LOGDATA",
-	InternalKeyKindInvalid:    "INVALID",
+	InternalKeyKindDelete:       "DEL",
+	InternalKeyKindSet:          "SET",
+	InternalKeyKindSetBithash:   "SETBITHASH",
+	InternalKeyKindLogData:      "LOGDATA",
+	InternalKeyKindPrefixDelete: "PREFIXDELETE",
+	InternalKeyKindInvalid:      "INVALID",
 }
 
 func (k InternalKeyKind) String() string {
@@ -55,8 +56,6 @@ type InternalKey struct {
 	UserKey []byte
 	Trailer uint64
 }
-
-var InvalidInternalKey = MakeInternalKey(nil, 0, InternalKeyKindInvalid)
 
 func MakeInternalKey(userKey []byte, seqNum uint64, kind InternalKeyKind) InternalKey {
 	return InternalKey{
@@ -81,31 +80,6 @@ func MakeSearchKey(userKey []byte) InternalKey {
 		UserKey: userKey,
 		Trailer: (InternalKeySeqNumMax << 8) | uint64(InternalKeyKindMax),
 	}
-}
-
-var kindsMap = map[string]InternalKeyKind{
-	"DEL":        InternalKeyKindDelete,
-	"SET":        InternalKeyKindSet,
-	"SETBITHASH": InternalKeyKindSetBithash,
-	"INVALID":    InternalKeyKindInvalid,
-}
-
-func ParseInternalKey(s string) InternalKey {
-	x := strings.Split(s, ".")
-	ukey := x[0]
-	kind, ok := kindsMap[x[1]]
-	if !ok {
-		panic(fmt.Sprintf("unknown kind: %q", x[1]))
-	}
-	j := 0
-	if x[2][0] == 'b' {
-		j = 1
-	}
-	seqNum, _ := strconv.ParseUint(x[2][j:], 10, 64)
-	if x[2][0] == 'b' {
-		seqNum |= InternalKeySeqNumBatch
-	}
-	return MakeInternalKey([]byte(ukey), seqNum, kind)
 }
 
 func DecodeInternalKey(encodedKey []byte) InternalKey {
@@ -234,7 +208,7 @@ func MakeInternalValue(value []byte, seqNum uint64, kind InternalKeyKind) Intern
 
 func EncodeInternalValue(value []byte, seqNum uint64, kind InternalKeyKind) ([]byte, func()) {
 	vLen := len(value) + 8
-	pool, closer := bytepools.DefaultBytePools.GetBytePool(vLen)
+	pool, closer := bytepools.ReaderBytePools.GetBytePool(vLen)
 	binary.LittleEndian.PutUint64(pool[0:8], (seqNum<<8)|uint64(kind))
 	if value != nil {
 		copy(pool[8:], value)
@@ -264,6 +238,6 @@ func DecodeInternalValue(encodedValue []byte) InternalValue {
 }
 
 func CheckValueValidByKeySetBithash(v []byte) bool {
-	vlen := len(v)
-	return vlen == 4 || vlen == 12
+	length := len(v)
+	return length == 4 || length == 12
 }

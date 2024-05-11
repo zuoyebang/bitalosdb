@@ -20,6 +20,7 @@ import (
 
 	"github.com/cockroachdb/errors/oserror"
 	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/consts"
 	"github.com/zuoyebang/bitalosdb/internal/mmap"
 	"github.com/zuoyebang/bitalosdb/internal/vfs"
 )
@@ -37,18 +38,30 @@ const (
 )
 
 const (
-	fieldOffsetMinUnflushedLogNum = metaFieldOffset
-	fieldOffsetNextFileNum        = fieldOffsetMinUnflushedLogNum + 8
-	fieldOffsetLastSeqNum         = fieldOffsetNextFileNum + 8
-	fieldOffsetIsBitableFlushed   = fieldOffsetLastSeqNum + 8
+	fieldOffsetMinUnflushedLogNumV1 = metaFieldOffset
+	fieldOffsetNextFileNumV1        = fieldOffsetMinUnflushedLogNumV1 + 8
+	fieldOffsetLastSeqNumV1         = fieldOffsetNextFileNumV1 + 8
+	fieldOffsetIsBitableFlushedV1   = fieldOffsetLastSeqNumV1 + 8
 )
 
 const (
-	metaVersion1 uint16 = 1
+	fieldOffsetIsBitableFlushedV2          = metaFieldOffset
+	fieldOffsetLastSeqNumV2                = fieldOffsetIsBitableFlushedV2 + 1
+	fieldOffsetBitowerNextFileNumV2        = fieldOffsetLastSeqNumV2 + 8
+	fieldOffsetBitowerMinUnflushedLogNumV2 = fieldOffsetBitowerNextFileNumV2 + 8*consts.DefaultBitowerNum
 )
 
+const (
+	metaVersion1 uint16 = 1 + iota
+	metaVersion2
+)
+
+type FileNum = base.FileNum
+
 type Metadata struct {
-	MetaEdit
+	MetaEditor
+
+	Bmes [consts.DefaultBitowerNum]BitowerMetaEditor
 
 	header *metaHeader
 	file   *mmap.MMap
@@ -60,26 +73,39 @@ type metaHeader struct {
 	version uint16
 }
 
-type MetaEdit struct {
-	MinUnflushedLogNum base.FileNum
-	NextFileNum        base.FileNum
-	LastSeqNum         uint64
-	FlushedBitable     uint8
+type MetaEditor struct {
+	LastSeqNum     uint64
+	FlushedBitable uint8
+}
+
+type BitowerMetaEditor struct {
+	Index              int
+	MinUnflushedLogNum FileNum
+	NextFileNum        FileNum
+}
+
+func (s *BitowerMetaEditor) MarkFileNumUsed(fileNum FileNum) {
+	if s.NextFileNum < fileNum {
+		s.NextFileNum = fileNum + 1
+	}
+}
+
+func (s *BitowerMetaEditor) GetNextFileNum() FileNum {
+	x := s.NextFileNum
+	s.NextFileNum++
+	return x
 }
 
 func NewMetadata(path string, fs vfs.FS) (*Metadata, error) {
-	meta := &Metadata{
-		fs: fs,
-	}
+	meta := &Metadata{fs: fs}
 
-	_, err := fs.Stat(path)
-	if oserror.IsNotExist(err) {
+	if _, err := fs.Stat(path); oserror.IsNotExist(err) {
 		if err = meta.create(path); err != nil {
 			return nil, err
 		}
 	}
 
-	if err = meta.load(path); err != nil {
+	if err := meta.load(path); err != nil {
 		return nil, err
 	}
 
@@ -129,6 +155,7 @@ func (m *Metadata) load(filename string) (err error) {
 	}
 
 	m.readHeader()
+	m.updateV1toV2()
 	m.readFields()
 
 	return nil
@@ -138,7 +165,7 @@ func (m *Metadata) readHeader() {
 	m.header = &metaHeader{}
 	version := m.file.ReadUInt16At(metaHeaderOffset)
 	if version == 0 {
-		version = metaVersion1
+		version = metaVersion2
 		m.file.WriteUInt16At(version, metaHeaderOffset)
 	}
 	m.header.version = version
@@ -149,10 +176,18 @@ func (m *Metadata) writeHeader() {
 }
 
 func (m *Metadata) readFields() {
-	m.MinUnflushedLogNum = base.FileNum(m.file.ReadUInt64At(fieldOffsetMinUnflushedLogNum))
-	m.NextFileNum = base.FileNum(m.file.ReadUInt64At(fieldOffsetNextFileNum))
-	m.LastSeqNum = m.file.ReadUInt64At(fieldOffsetLastSeqNum)
-	m.FlushedBitable = m.file.ReadUInt8At(fieldOffsetIsBitableFlushed)
+	m.FlushedBitable = m.file.ReadUInt8At(fieldOffsetIsBitableFlushedV2)
+	m.LastSeqNum = m.file.ReadUInt64At(fieldOffsetLastSeqNumV2)
+
+	for i := range m.Bmes {
+		m.Bmes[i].Index = i
+		m.Bmes[i].NextFileNum = FileNum(m.file.ReadUInt64At(fieldOffsetBitowerNextFileNumV2 + i*8))
+		m.Bmes[i].MinUnflushedLogNum = FileNum(m.file.ReadUInt64At(fieldOffsetBitowerMinUnflushedLogNumV2 + i*8))
+	}
+}
+
+func (m *Metadata) Flush() error {
+	return m.file.Flush()
 }
 
 func (m *Metadata) Close() error {
@@ -161,33 +196,79 @@ func (m *Metadata) Close() error {
 
 func (m *Metadata) GetFieldFlushedBitable() uint8 {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.FlushedBitable
+	flushed := m.FlushedBitable
+	m.mu.RUnlock()
+	return flushed
 }
 
 func (m *Metadata) SetFieldFlushedBitable() {
 	m.mu.Lock()
 	m.FlushedBitable = 1
-	m.file.WriteUInt8At(m.FlushedBitable, fieldOffsetIsBitableFlushed)
+	m.file.WriteUInt8At(m.FlushedBitable, fieldOffsetIsBitableFlushedV2)
+	m.Flush()
 	m.mu.Unlock()
 }
 
-func (m *Metadata) WriteMetaEdit(me *MetaEdit) {
+func (m *Metadata) writeMetaEditLocked(me *MetaEditor) {
+	if me.LastSeqNum != 0 {
+		m.LastSeqNum = me.LastSeqNum
+		m.file.WriteUInt64At(m.LastSeqNum, fieldOffsetLastSeqNumV2)
+		m.Flush()
+	}
+}
+
+func (m *Metadata) writeBitowerMetaEditLocked(me *BitowerMetaEditor) {
+	index := me.Index
+	if me.NextFileNum != 0 {
+		m.Bmes[index].NextFileNum = me.NextFileNum
+		m.file.WriteUInt64At(uint64(me.NextFileNum), fieldOffsetBitowerNextFileNumV2+index*8)
+	}
+	if me.MinUnflushedLogNum != 0 {
+		m.Bmes[index].MinUnflushedLogNum = me.MinUnflushedLogNum
+		m.file.WriteUInt64At(uint64(me.MinUnflushedLogNum), fieldOffsetBitowerMinUnflushedLogNumV2+index*8)
+	}
+	m.Flush()
+}
+
+func (m *Metadata) Write(me *MetaEditor, bme *BitowerMetaEditor) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if me.MinUnflushedLogNum != 0 {
-		m.MinUnflushedLogNum = me.MinUnflushedLogNum
-		m.file.WriteUInt64At(uint64(m.MinUnflushedLogNum), fieldOffsetMinUnflushedLogNum)
+	m.writeMetaEditLocked(me)
+	m.writeBitowerMetaEditLocked(bme)
+}
+
+func (m *Metadata) WriteMetaEdit(me *MetaEditor) {
+	m.mu.Lock()
+	m.writeMetaEditLocked(me)
+	m.mu.Unlock()
+}
+
+func (m *Metadata) WriteBitowerMetaEdit(bme *BitowerMetaEditor) {
+	m.mu.Lock()
+	m.writeBitowerMetaEditLocked(bme)
+	m.mu.Unlock()
+}
+
+func (m *Metadata) updateV1toV2() {
+	if m.header.version != metaVersion1 {
+		return
 	}
 
-	if me.NextFileNum != 0 {
-		m.NextFileNum = me.NextFileNum
-		m.file.WriteUInt64At(uint64(m.NextFileNum), fieldOffsetNextFileNum)
+	lastSeqNum := m.file.ReadUInt64At(fieldOffsetLastSeqNumV1)
+	flushedBitable := m.file.ReadUInt8At(fieldOffsetIsBitableFlushedV1)
+	minUnflushedLogNum := m.file.ReadUInt64At(fieldOffsetMinUnflushedLogNumV1)
+	nextFileNum := m.file.ReadUInt64At(fieldOffsetNextFileNumV1)
+
+	m.file.WriteUInt64At(lastSeqNum, fieldOffsetLastSeqNumV2)
+	m.file.WriteUInt8At(flushedBitable, fieldOffsetIsBitableFlushedV2)
+
+	for i := 0; i < len(m.Bmes); i++ {
+		m.file.WriteUInt64At(nextFileNum, fieldOffsetBitowerNextFileNumV2+i*8)
+		m.file.WriteUInt64At(minUnflushedLogNum, fieldOffsetBitowerMinUnflushedLogNumV2+i*8)
 	}
 
-	if me.LastSeqNum != 0 {
-		m.LastSeqNum = me.LastSeqNum
-		m.file.WriteUInt64At(m.LastSeqNum, fieldOffsetLastSeqNum)
-	}
+	m.header.version = metaVersion2
+	m.writeHeader()
+	m.file.Flush()
 }

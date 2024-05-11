@@ -20,6 +20,7 @@ import (
 	"io"
 
 	"github.com/cockroachdb/errors"
+	"github.com/zuoyebang/bitalosdb/internal/base"
 )
 
 const (
@@ -130,7 +131,7 @@ func (b *Bithash) initTables() error {
 			return err
 		}
 
-		b.logger.Infof("bithash initTables file:%s fileMeta:%s", filename, fileMeta.String())
+		b.logger.Infof("bithash initTables file:%s fileMeta:%s", base.GetFilePathBase(filename), fileMeta.String())
 
 		if fileMeta.state == fileMetaStateCompact {
 			b.meta.freeFileMetadata(fn)
@@ -152,7 +153,7 @@ func (b *Bithash) initTables() error {
 		if !isRebuildTable {
 			_, err = b.openTable(fn, f, filename)
 			if err != nil {
-				b.logger.Warnf("bithash initTables openTable fail file:%s err:%s", filename, err.Error())
+				b.logger.Warnf("bithash initTables openTable fail file:%s err:%s", base.GetFilePathBase(filename), err)
 				if err == ErrBhNewReaderFail {
 					isRebuildTable = true
 				} else if err = f.Close(); err != nil {
@@ -203,7 +204,7 @@ func (b *Bithash) rebuildTable(filename string, fn FileNum) (err error) {
 		b.addRwwWriters(w)
 	}
 
-	b.logger.Infof("bithash rebuild table success file:%s isFull:%v", filename, isFull)
+	b.logger.Infof("bithash rebuild table success file:%s isFull:%v", base.GetFilePathBase(filename), isFull)
 
 	return nil
 }
@@ -266,7 +267,7 @@ func (b *Bithash) closeTable(w *Writer, force bool) error {
 		return err
 	}
 
-	b.logger.Infof("bithash closeTable success file:%s", w.filename)
+	b.logger.Infof("[BITHASH %d] closeTable success file:%s", b.index, base.GetFilePathBase(w.filename))
 	return nil
 }
 

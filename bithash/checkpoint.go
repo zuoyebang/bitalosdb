@@ -16,14 +16,14 @@ package bithash
 
 import (
 	"os"
-	"path"
+	"path/filepath"
 
 	"github.com/cockroachdb/errors"
 	"github.com/cockroachdb/errors/oserror"
 	"github.com/zuoyebang/bitalosdb/internal/vfs"
 )
 
-func (b *Bithash) Checkpoint(destDir string) (err error) {
+func (b *Bithash) Checkpoint(fs vfs.FS, destDir string) (err error) {
 	if _, err = os.Stat(destDir); !oserror.IsNotExist(err) {
 		return errors.Errorf("bithash: checkpoint dir exist %s", destDir)
 	}
@@ -33,7 +33,7 @@ func (b *Bithash) Checkpoint(destDir string) (err error) {
 	if err != nil {
 		return err
 	}
-	dir, err = b.fs.OpenDir(destDir)
+	dir, err = fs.OpenDir(destDir)
 	if err != nil {
 		return err
 	}
@@ -42,35 +42,34 @@ func (b *Bithash) Checkpoint(destDir string) (err error) {
 		return err
 	}
 
-	{
-		manifest := MakeFilepath(b.fs, b.dirname, fileTypeManifest, 0)
-		err = vfs.Copy(b.fs, manifest, MakeFilepath(b.fs, destDir, fileTypeManifest, 0))
-		if err != nil {
-			return err
-		}
+	manifest := MakeFilepath(fs, b.dirname, fileTypeManifest, 0)
+	destManifest := MakeFilepath(fs, destDir, fileTypeManifest, 0)
+	err = vfs.Copy(fs, manifest, destManifest)
+	if err != nil {
+		return err
+	}
 
-		fileNumMap := MakeFilepath(b.fs, b.dirname, fileTypeFileNumMap, 0)
-		err = vfs.Copy(b.fs, fileNumMap, MakeFilepath(b.fs, destDir, fileTypeFileNumMap, 0))
-		if err != nil {
-			return err
-		}
+	fileNumMap := MakeFilepath(fs, b.dirname, fileTypeFileNumMap, 0)
+	destFileNumMap := MakeFilepath(fs, destDir, fileTypeFileNumMap, 0)
+	if err = vfs.Copy(fs, fileNumMap, destFileNumMap); err != nil {
+		return err
+	}
 
-		compactLog := MakeFilepath(b.fs, b.dirname, fileTypeCompactLog, 0)
-		err = vfs.Copy(b.fs, compactLog, MakeFilepath(b.fs, destDir, fileTypeCompactLog, 0))
-		if err != nil {
-			return err
-		}
+	compactLog := MakeFilepath(fs, b.dirname, fileTypeCompactLog, 0)
+	destCompactLog := MakeFilepath(fs, destDir, fileTypeCompactLog, 0)
+	if err = vfs.Copy(fs, compactLog, destCompactLog); err != nil {
+		return err
 	}
 
 	copyTable := func() error {
 		b.meta.mu.RLock()
 		defer b.meta.mu.RUnlock()
 		for fn := range b.meta.mu.filesMeta {
-			filename := MakeFilepath(b.fs, b.dirname, fileTypeTable, fn)
-			if _, err = b.fs.Stat(filename); err != nil {
+			filename := MakeFilepath(fs, b.dirname, fileTypeTable, fn)
+			if _, err = fs.Stat(filename); err != nil {
 				return err
 			}
-			err = vfs.LinkOrCopy(b.fs, filename, path.Join(destDir, b.fs.PathBase(filename)))
+			err = vfs.LinkOrCopy(fs, filename, filepath.Join(destDir, fs.PathBase(filename)))
 			if err != nil {
 				return err
 			}

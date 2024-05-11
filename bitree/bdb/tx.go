@@ -53,12 +53,10 @@ func (rt *ReadTx) Ref() {
 func (rt *ReadTx) Unref(update bool) (err error) {
 	if rt.ref.Add(-1) == 0 {
 		err = rt.tx.Rollback()
-
 		if update {
 			err = rt.bdb.Update(func(tx *Tx) error { return nil })
 		}
 	}
-
 	return err
 }
 

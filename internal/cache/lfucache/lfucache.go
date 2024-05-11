@@ -23,6 +23,7 @@ import (
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/cache"
 	"github.com/zuoyebang/bitalosdb/internal/hash"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 )
 
 const (
@@ -32,7 +33,7 @@ const (
 
 var _ cache.ICache = (*LfuCache)(nil)
 
-func New(opts *base.CacheOptions) cache.ICache {
+func New(opts *options.CacheOptions) cache.ICache {
 	return NewLfuCache(opts)
 }
 
@@ -49,7 +50,7 @@ type LfuCache struct {
 	workerParams []chan *workerParam
 }
 
-func NewLfuCache(opts *base.CacheOptions) *LfuCache {
+func NewLfuCache(opts *options.CacheOptions) *LfuCache {
 	size := uint64(opts.Size)
 	shardNum := uint32(opts.Shards)
 	maxSize := size / uint64(shardNum)

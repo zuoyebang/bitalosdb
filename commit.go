@@ -43,7 +43,7 @@ func (q *commitQueue) pack(head, tail uint32) uint64 {
 		uint64(tail&mask)
 }
 
-func (q *commitQueue) enqueue(b *Batch) {
+func (q *commitQueue) enqueue(b *BatchBitower) {
 	ptrs := atomic.LoadUint64(&q.headTail)
 	head, tail := q.unpack(ptrs)
 	if (tail+uint32(len(q.slots)))&(1<<dequeueBits-1) == head {
@@ -60,7 +60,7 @@ func (q *commitQueue) enqueue(b *Batch) {
 	atomic.AddUint64(&q.headTail, 1<<dequeueBits)
 }
 
-func (q *commitQueue) dequeue() *Batch {
+func (q *commitQueue) dequeue() *BatchBitower {
 	for {
 		ptrs := atomic.LoadUint64(&q.headTail)
 		head, tail := q.unpack(ptrs)
@@ -69,7 +69,7 @@ func (q *commitQueue) dequeue() *Batch {
 		}
 
 		slot := &q.slots[tail&uint32(len(q.slots)-1)]
-		b := (*Batch)(atomic.LoadPointer(slot))
+		b := (*BatchBitower)(atomic.LoadPointer(slot))
 		if b == nil || atomic.LoadUint32(&b.applied) == 0 {
 			return nil
 		}
@@ -85,8 +85,8 @@ func (q *commitQueue) dequeue() *Batch {
 type commitEnv struct {
 	logSeqNum     *uint64
 	visibleSeqNum *uint64
-	apply         func(b *Batch, mem *memTable) error
-	write         func(b *Batch, wg *sync.WaitGroup, err *error) (*memTable, error)
+	apply         func(b *BatchBitower, mem *memTable) error
+	write         func(b *BatchBitower, wg *sync.WaitGroup, err *error) (*memTable, error)
 	useQueue      bool
 }
 
@@ -105,7 +105,7 @@ func newCommitPipeline(env commitEnv) *commitPipeline {
 	return p
 }
 
-func (p *commitPipeline) Commit(b *Batch, syncWAL bool) error {
+func (p *commitPipeline) Commit(b *BatchBitower, syncWAL bool) error {
 	if b.Empty() {
 		return nil
 	}
@@ -136,48 +136,7 @@ func (p *commitPipeline) Commit(b *Batch, syncWAL bool) error {
 	return b.commitErr
 }
 
-func (p *commitPipeline) AllocateSeqNum(count int, prepare func(), apply func(seqNum uint64)) {
-	b := newBatch(nil)
-	defer b.release()
-
-	b.data = make([]byte, batchHeaderLen)
-	b.setCount(uint32(count))
-	b.commit.Add(1)
-
-	p.sem <- struct{}{}
-
-	p.mu.Lock()
-
-	p.pending.enqueue(b)
-
-	logSeqNum := atomic.AddUint64(p.env.logSeqNum, uint64(count)) - uint64(count)
-	seqNum := logSeqNum
-	if seqNum == 0 {
-		atomic.AddUint64(p.env.logSeqNum, 1)
-		seqNum++
-	}
-	b.setSeqNum(seqNum)
-
-	for {
-		visibleSeqNum := atomic.LoadUint64(p.env.visibleSeqNum)
-		if visibleSeqNum == logSeqNum {
-			break
-		}
-		runtime.Gosched()
-	}
-
-	prepare()
-
-	p.mu.Unlock()
-
-	apply(b.SeqNum())
-
-	p.publish(b)
-
-	<-p.sem
-}
-
-func (p *commitPipeline) prepare(b *Batch, syncWAL bool) (*memTable, error) {
+func (p *commitPipeline) prepare(b *BatchBitower, syncWAL bool) (*memTable, error) {
 	n := uint64(b.Count())
 	if n == invalidBatchCount {
 		return nil, ErrInvalidBatch
@@ -212,7 +171,7 @@ func (p *commitPipeline) prepare(b *Batch, syncWAL bool) (*memTable, error) {
 	return mem, err
 }
 
-func (p *commitPipeline) publish(b *Batch) {
+func (p *commitPipeline) publish(b *BatchBitower) {
 	atomic.StoreUint32(&b.applied, 1)
 
 	if p.env.useQueue {

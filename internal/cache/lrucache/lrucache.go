@@ -5,17 +5,17 @@ import (
 	"crypto/md5"
 	"encoding/binary"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/cache"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 )
 
 var _ cache.ICache = (*LruCache)(nil)
 
-func New(opts *base.CacheOptions) cache.ICache {
+func New(opts *options.CacheOptions) cache.ICache {
 	return newShards(opts)
 }
 
-func NewLrucache(opts *base.CacheOptions) *LruCache {
+func NewLrucache(opts *options.CacheOptions) *LruCache {
 	return newShards(opts)
 }
 
@@ -42,7 +42,7 @@ func (lrc *LruCache) encodeKeyHash(key []byte) (uint64, uint64) {
 	return keyID, keyHash
 }
 
-func (lrc *LruCache) GetKeyHash(key []byte) uint32 {
+func (lrc *LruCache) GetKeyHash(_ []byte) uint32 {
 	return 0
 }
 
@@ -64,7 +64,7 @@ func (lrc *LruCache) Get(key []byte, _ uint32) ([]byte, func(), bool) {
 }
 
 func (lrc *LruCache) Set(key, value []byte, _ uint32) error {
-	if key == nil || value == nil {
+	if len(key) == 0 || len(value) == 0 {
 		return nil
 	}
 

@@ -18,41 +18,50 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
-
-	"github.com/zuoyebang/bitalosdb/internal/sortedkv"
 
 	"github.com/stretchr/testify/require"
 	"github.com/zuoyebang/bitalosdb/bitable"
 	"github.com/zuoyebang/bitalosdb/bitpage"
 	"github.com/zuoyebang/bitalosdb/bitree/bdb"
 	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/bitask"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
 	"github.com/zuoyebang/bitalosdb/internal/hash"
+	"github.com/zuoyebang/bitalosdb/internal/options"
+	"github.com/zuoyebang/bitalosdb/internal/sortedkv"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 )
 
 const testDir = "test"
+const testBitreeIndex = 1
 
-func testMakeKey(i int) []byte {
-	return []byte(fmt.Sprintf("bitforest_key_%d", i))
+var testBtree *Bitree
+
+type testBitpageTask struct {
+	task   *bitask.BitpageTask
+	taskWg sync.WaitGroup
 }
 
-func testOpenBitree() (*Bitree, *base.BitreeOptions) {
-	return testOpenBitreeInternal(128<<20, false)
-}
+var bpageTask *testBitpageTask
 
-func testOpenBitree1(bithashSize int) (*Bitree, *base.BitreeOptions) {
-	return testOpenBitreeInternal(bithashSize, false)
+var (
+	testBithashSize  = 128 << 20
+	testIsUseBitable = false
+)
+
+func makeTestKey(i int) []byte {
+	return []byte(fmt.Sprintf("bitree_key_%d", i))
 }
 
 func testMakeSortedKV(num int, seqNum uint64, vsize int) sortedkv.SortedKVList {
-	return sortedkv.MakeSortedKVList(0, num, seqNum, vsize)
+	return sortedkv.MakeSlotSortedKVList(0, num, seqNum, vsize, uint16(testBitreeIndex))
 }
 
-func testMakeSortedKey(n int) []byte {
-	return sortedkv.MakeSortedKey(n)
+func testMakeSortedSlotKey(n int) []byte {
+	return sortedkv.MakeSortedSlotKey(n, uint16(testBitreeIndex))
 }
 
 func testNewBitreePages(t *Bitree) error {
@@ -62,7 +71,7 @@ func testNewBitreePages(t *Bitree) error {
 			return bdb.ErrBucketNotFound
 		}
 		for j := 1; j < 10; j++ {
-			key := testMakeKey(j)
+			key := makeTestKey(j)
 			pn, err := t.bpage.NewPage()
 			if err != nil {
 				return err
@@ -76,165 +85,61 @@ func testNewBitreePages(t *Bitree) error {
 	return err
 }
 
-func testOpenBitreeInternal(bithashSize int, useBitable bool) (*Bitree, *base.BitreeOptions) {
-	optspool := base.InitTestDefaultsOptionsPool()
-	optspool.BaseOptions.UseBitable = useBitable
-	optspool.BithashOptions.TableMaxSize = bithashSize
-	bitreeOpts := optspool.Clone(base.BitreeOptionsType).(*base.BitreeOptions)
-	btree, err := NewBitree(testDir, bitreeOpts)
+func resetTestOptsVal() {
+	testBithashSize = 128 << 20
+	testIsUseBitable = false
+}
+
+func testOpenBitree() (*Bitree, *options.BitreeOptions) {
+	defer func() {
+		resetTestOptsVal()
+	}()
+	optsPool := options.InitTestDefaultsOptionsPool()
+	return testOpenBitree1(optsPool)
+}
+
+func testOpenBitree1(optsPool *options.OptionsPool) (*Bitree, *options.BitreeOptions) {
+	bpageTask = &testBitpageTask{}
+	bpageTask.task = bitask.NewBitpageTask(&bitask.BitpageTaskOptions{
+		Size:    100,
+		DbState: optsPool.DbState,
+		Logger:  optsPool.BaseOptions.Logger,
+		DoFunc:  testDoBitpageTask,
+		TaskWg:  &bpageTask.taskWg,
+	})
+	optsPool.BaseOptions.BitpageTaskPushFunc = bpageTask.task.PushTask
+	optsPool.BaseOptions.UseBitable = testIsUseBitable
+	optsPool.BithashOptions.TableMaxSize = testBithashSize
+	optsPool.BaseOptions.KeyPrefixDeleteFunc = options.TestKeyPrefixDeleteFunc
+	bitreeOpts := optsPool.CloneBitreeOptions()
+	bitreeOpts.Index = testBitreeIndex
+
+	var err error
+	testBtree, err = NewBitree(testDir, bitreeOpts)
 	if err != nil {
 		panic(err)
 	}
-	return btree, bitreeOpts
+	return testBtree, bitreeOpts
 }
 
-func TestBitree_Bdb_Seek(t *testing.T) {
-	os.RemoveAll(testDir)
-
-	seekFunc := func(index int) {
-		fmt.Println("seekFunc", index)
-		btree, _ := testOpenBitree()
-
-		pn, sentinel, closer := btree.FindKeyPageNum(consts.BdbMaxKey)
-		require.Equal(t, bitpage.PageNum(1), pn)
-		require.Equal(t, consts.BdbMaxKey, sentinel)
-		closer()
-
-		if index == 0 {
-			for i := 0; i < 10; i++ {
-				key := testMakeKey(i)
-				pn, sentinel, closer = btree.FindKeyPageNum(key)
-				require.Equal(t, bitpage.PageNum(1), pn)
-				require.Equal(t, consts.BdbMaxKey, sentinel)
-				closer()
-			}
-			err := btree.bdb.Update(func(tx *bdb.Tx) error {
-				bkt := tx.Bucket(consts.BdbBucketName)
-				if bkt == nil {
-					return bdb.ErrBucketNotFound
-				}
-				for i := 2; i < 10; i++ {
-					if i%3 != 0 {
-						continue
-					}
-
-					key := testMakeKey(i)
-					require.NoError(t, bkt.Put(key, bitpage.PageNum(i).ToByte()))
-					fmt.Println("set key", string(key), i)
-				}
-				return nil
-			})
-			btree.txPool.Update()
-			require.NoError(t, err)
-		}
-
-		checkValue := func(i, exp int) {
-			key := testMakeKey(i)
-			pn, sentinel, closer = btree.FindKeyPageNum(key)
-			require.Equal(t, bitpage.PageNum(exp), pn)
-			closer()
-			if exp == 1 {
-				require.Equal(t, consts.BdbMaxKey, sentinel)
-			} else {
-				require.Equal(t, testMakeKey(exp), sentinel)
-			}
-		}
-
-		checkValue(0, 3)
-		checkValue(3, 3)
-		checkValue(12, 3)
-		checkValue(4, 6)
-		checkValue(5, 6)
-		checkValue(51, 6)
-		checkValue(6, 6)
-		checkValue(60, 9)
-		checkValue(899, 9)
-		checkValue(9, 9)
-		checkValue(90, 1)
-		checkValue(91, 1)
-
-		require.NoError(t, testBitreeClose(btree))
-	}
-
-	for i := 0; i < 5; i++ {
-		seekFunc(i)
-	}
-
-	require.NoError(t, os.RemoveAll(testDir))
+func testDoBitpageTask(task *bitask.BitpageTaskData) {
+	testBtree.DoBitpageTask(task)
 }
 
-func TestBitree_Bdb_Seek_LargeKey(t *testing.T) {
-	os.RemoveAll(testDir)
-	btree, _ := testOpenBitree()
-	defer os.RemoveAll(testDir)
-
-	keyPrefix := utils.FuncRandBytes(1100)
-	makeLargeKey := func(i int) []byte {
-		return []byte(fmt.Sprintf("bdb_%s_%d", keyPrefix, i))
-	}
-	err := btree.bdb.Update(func(tx *bdb.Tx) error {
-		bkt := tx.Bucket(consts.BdbBucketName)
-		if bkt == nil {
-			return bdb.ErrBucketNotFound
-		}
-		for i := 2; i < 200; i++ {
-			if i%3 != 0 {
-				continue
-			}
-			key := makeLargeKey(i)
-			require.NoError(t, bkt.Put(key, bitpage.PageNum(i).ToByte()))
-		}
-		return nil
-	})
-	btree.txPool.Update()
-	require.NoError(t, err)
-
-	expPns := []int{102, 102, 21, 3, 42, 51, 6, 72, 81, 9, 102, 111, 12, 132, 141, 15, 162, 171, 18, 192, 21, 21, 24, 24,
-		24, 27, 27, 27, 3, 3, 30, 33, 33, 33, 36, 36, 36, 39, 39, 39, 42, 42, 42, 45, 45, 45, 48, 48, 48, 51, 51, 51, 54, 54, 54,
-		57, 57, 57, 6, 6, 60, 63, 63, 63, 66, 66, 66, 69, 69, 69, 72, 72, 72, 75, 75, 75, 78, 78, 78, 81, 81, 81, 84, 84, 84, 87,
-		87, 87, 9, 9, 90, 93, 93, 93, 96, 96, 96, 99, 99, 99, 102, 102, 102, 105, 105, 105, 108, 108, 108, 111, 111, 111, 114,
-		114, 114, 117, 117, 117, 12, 12, 120, 123, 123, 123, 126, 126, 126, 129, 129, 129, 132, 132, 132, 135, 135, 135,
-		138, 138, 138, 141, 141, 141, 144, 144, 144, 147, 147, 147, 15, 15, 150, 153, 153, 153, 156, 156, 156, 159, 159,
-		159, 162, 162, 162, 165, 165, 165, 168, 168, 168, 171, 171, 171, 174, 174, 174, 177, 177, 177, 18, 18, 180, 183,
-		183, 183, 186, 186, 186, 189, 189, 189, 192, 192, 192, 195, 195, 195, 198, 198, 198, 21}
-
-	for i := 0; i < 200; i++ {
-		key := makeLargeKey(i)
-		pn, _, closer := btree.FindKeyPageNum(key)
-		require.Equal(t, bitpage.PageNum(expPns[i]), pn)
-		closer()
-	}
-
-	checkValue := func(i, exp int) {
-		key := makeLargeKey(i)
-		pn, sentinel, closer := btree.FindKeyPageNum(key)
-		require.Equal(t, bitpage.PageNum(exp), pn)
-		closer()
-		if exp == 1 {
-			require.Equal(t, consts.BdbMaxKey, sentinel)
-		} else {
-			require.Equal(t, makeLargeKey(exp), sentinel)
-		}
-	}
-
-	checkValue(201, 21)
-	checkValue(255, 27)
-	checkValue(402, 42)
-	checkValue(518, 54)
-	checkValue(627, 63)
-	checkValue(734, 75)
-	checkValue(846, 87)
-	checkValue(899, 9)
-	checkValue(953, 96)
-	checkValue(999, 1)
-
-	require.NoError(t, os.RemoveAll(testDir))
+func testBitreeClose(bt *Bitree) error {
+	bpageTask.task.Close()
+	bpageTask.taskWg.Wait()
+	err := bt.Close()
+	bt.opts.DeleteFilePacer.Close()
+	return err
 }
 
 func TestBitree_CompactToBitable(t *testing.T) {
 	defer os.RemoveAll(testDir)
 	os.RemoveAll(testDir)
-	btree, _ := testOpenBitreeInternal(10<<20, true)
+	testBithashSize = 10 << 20
+	testIsUseBitable = true
+	btree, _ := testOpenBitree()
 	defer func() {
 		require.NoError(t, testBitreeClose(btree))
 	}()
@@ -247,7 +152,7 @@ func TestBitree_CompactToBitable(t *testing.T) {
 			return bdb.ErrBucketNotFound
 		}
 		for i := 1; i < 10; i++ {
-			key := testMakeKey(i)
+			key := makeTestKey(i)
 			pn, err := btree.bpage.NewPage()
 			require.NoError(t, err)
 			require.NoError(t, bkt.Put(key, pn.ToByte()))
@@ -257,7 +162,8 @@ func TestBitree_CompactToBitable(t *testing.T) {
 	btree.txPool.Update()
 	require.NoError(t, err)
 
-	require.NoError(t, btree.MemFlushStart())
+	bw, err := btree.NewBitreeWriter()
+	require.NoError(t, err)
 	largeValue := utils.FuncRandBytes(520)
 	smallValue := utils.FuncRandBytes(500)
 	keyCount := 1000
@@ -266,19 +172,15 @@ func TestBitree_CompactToBitable(t *testing.T) {
 	seqNum += uint64(keyCount)
 
 	for i := 0; i < keyCount; i++ {
-		pn, sentinel, closer := btree.FindKeyPageNum(kvList[i].Key.UserKey)
-		closer()
-		require.NotEqual(t, nilPageNum, pn)
-
 		if i%2 == 0 {
 			kvList[i].Value = smallValue
-			require.NoError(t, btree.writer.set(*kvList[i].Key, kvList[i].Value, pn, sentinel))
 		} else {
 			kvList[i].Value = largeValue
-			require.NoError(t, btree.writer.set(*kvList[i].Key, kvList[i].Value, pn, sentinel))
 		}
+		require.NoError(t, bw.Apply(*kvList[i].Key, kvList[i].Value))
 	}
-	require.NoError(t, btree.MemFlushFinish())
+	require.NoError(t, bw.Finish())
+
 	time.Sleep(2 * time.Second)
 
 	readIter := func(it base.InternalIterator) {
@@ -298,9 +200,7 @@ func TestBitree_CompactToBitable(t *testing.T) {
 	require.NoError(t, btreeIter.Close())
 
 	require.Equal(t, 10, btree.bpage.GetPageCount())
-	fmt.Println("CompactBitreeToBitable before", btree.BitpageStats().String())
-	pn := btree.CompactBitreeToBitable(1)
-	require.Equal(t, 11, btree.bpage.GetPageCount())
+	pn := btree.CompactBitreeToBitable()
 
 	bdbIter := btree.NewBdbIter()
 	bdbKey, bdbValue := bdbIter.First()
@@ -319,7 +219,6 @@ func TestBitree_CompactToBitable(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 	require.Equal(t, 1, btree.bpage.GetPageCount())
-	fmt.Println("CompactBitreeToBitable after", btree.BitpageStats().String())
 
 	btableIter := btree.newBitableIter(nil)
 	readIter(btableIter)
@@ -352,20 +251,18 @@ func TestBitree_Checkpoint_Flush(t *testing.T) {
 	seqNum += uint64(keyCount)
 
 	writeData := func(start int) {
-		require.NoError(t, btree.MemFlushStart())
+		bw, err := btree.NewBitreeWriter()
+		require.NoError(t, err)
 		for i := start; i < start+100; i++ {
-			pn, sentinel, closer := btree.FindKeyPageNum(kvList[i].Key.UserKey)
-			closer()
-			require.NotEqual(t, nilPageNum, pn)
-			require.NoError(t, btree.writer.set(*kvList[i].Key, kvList[i].Value, pn, sentinel))
+			require.NoError(t, bw.Apply(*kvList[i].Key, kvList[i].Value))
 		}
-		require.NoError(t, btree.MemFlushFinish())
+		require.NoError(t, bw.Finish())
 	}
 
 	writeData(0)
 	time.Sleep(1 * time.Second)
 	require.Equal(t, uint64(0), btree.dbState.GetBitpageFlushCount())
-	require.NoError(t, btree.Checkpoint(ckDir, testDir))
+	require.NoError(t, btree.Checkpoint(btree.opts.FS, ckDir, testDir))
 
 	writeData(100)
 	time.Sleep(1 * time.Second)
@@ -383,8 +280,8 @@ func TestBitree_Checkpoint_Flush(t *testing.T) {
 func TestBitree_BitpageFlushState(t *testing.T) {
 	defer os.RemoveAll(testDir)
 	os.RemoveAll(testDir)
-	btree, _ := testOpenBitree()
 
+	btree, _ := testOpenBitree()
 	require.NoError(t, testNewBitreePages(btree))
 
 	keyCount := 100
@@ -393,23 +290,23 @@ func TestBitree_BitpageFlushState(t *testing.T) {
 	seqNum += uint64(keyCount)
 
 	var pageNum bitpage.PageNum
-	require.NoError(t, btree.MemFlushStart())
+	bw, err := btree.NewBitreeWriter()
+	require.NoError(t, err)
 	for i := 0; i < keyCount; i++ {
 		pn, sentinel, closer := btree.FindKeyPageNum(kvList[i].Key.UserKey)
 		closer()
 		require.NotEqual(t, nilPageNum, pn)
-		require.NoError(t, btree.writer.set(*kvList[i].Key, kvList[i].Value, pn, sentinel))
+		require.NoError(t, bw.set(*kvList[i].Key, kvList[i].Value, pn, sentinel))
 		pageNum = pn
 	}
-	require.NoError(t, btree.MemFlushFinish())
+	require.NoError(t, bw.Finish())
 
-	task := &base.BitpageTaskData{
-		Event:    base.BitpageEventFlush,
+	task := &bitask.BitpageTaskData{
+		Event:    bitask.BitpageEventFlush,
 		Pn:       uint32(pageNum),
 		Sentinel: nil,
 	}
-	btree.pushTaskData(task)
-	err := btree.bitpageFlush(task)
+	err = btree.bpage.PageFlush(bitpage.PageNum(task.Pn), task.Sentinel, "")
 	require.Equal(t, bitpage.ErrPageFlushState, err)
 
 	require.NoError(t, testBitreeClose(btree))
@@ -419,11 +316,9 @@ func TestBitree_BitpageFlushDelPercent(t *testing.T) {
 	defer os.RemoveAll(testDir)
 	os.RemoveAll(testDir)
 
-	optspool := base.InitDefaultsOptionsPool()
-	optspool.BaseOptions.BitpageFlushSize = 40 << 10
-	bitreeOpts := optspool.Clone(base.BitreeOptionsType).(*base.BitreeOptions)
-	btree, err := NewBitree(testDir, bitreeOpts)
-	require.NoError(t, err)
+	optsPool := options.InitTestDefaultsOptionsPool()
+	optsPool.BaseOptions.BitpageFlushSize = 40 << 10
+	btree, _ := testOpenBitree1(optsPool)
 	require.NoError(t, testNewBitreePages(btree))
 
 	keyCount := 1000
@@ -432,16 +327,17 @@ func TestBitree_BitpageFlushDelPercent(t *testing.T) {
 	seqNum += uint64(keyCount)
 
 	var pageNum bitpage.PageNum
-	require.NoError(t, btree.MemFlushStart())
+	bw, err := btree.NewBitreeWriter()
+	require.NoError(t, err)
 	for i := 0; i < keyCount; i++ {
-		k := testMakeKey(i)
+		k := makeTestKey(i)
 		pn, sentinel, closer := btree.FindKeyPageNum(k)
 		closer()
 		require.NotEqual(t, nilPageNum, pn)
 		if i%2 == 0 || i > 700 {
 			kvList[i].Key.SetKind(base.InternalKeyKindDelete)
 		}
-		require.NoError(t, btree.writer.set(*kvList[i].Key, kvList[i].Value, pn, sentinel))
+		require.NoError(t, bw.set(*kvList[i].Key, kvList[i].Value, pn, sentinel))
 		pageNum = pn
 	}
 
@@ -449,7 +345,7 @@ func TestBitree_BitpageFlushDelPercent(t *testing.T) {
 	if delPercent < 0.5 {
 		t.Fatal("delpercent err", delPercent)
 	}
-	require.NoError(t, btree.MemFlushFinish())
+	require.NoError(t, bw.Finish())
 	time.Sleep(2 * time.Second)
 	require.Equal(t, uint64(1), btree.dbState.GetBitpageFlushCount())
 
@@ -469,8 +365,12 @@ func TestBitree_BitpageFlushDelPercent(t *testing.T) {
 }
 
 func TestBitree_BitableFlushBatch(t *testing.T) {
+	defer os.RemoveAll(testDir)
 	os.RemoveAll(testDir)
-	btree, _ := testOpenBitreeInternal(10<<20, true)
+
+	testBithashSize = 10 << 20
+	testIsUseBitable = true
+	btree, _ := testOpenBitree()
 	defer func() {
 		require.NoError(t, testBitreeClose(btree))
 		require.NoError(t, os.RemoveAll(testDir))
@@ -500,12 +400,9 @@ func TestBitree_IterRange(t *testing.T) {
 	kvList := testMakeSortedKV(keyCount, seqNum, 1)
 	seqNum += uint64(keyCount)
 
-	require.NoError(t, btree.MemFlushStart())
+	bw, err := btree.NewBitreeWriter()
+	require.NoError(t, err)
 	for i := 0; i < keyCount; i++ {
-		k := testMakeKey(i)
-		pn, sentinel, closer := btree.FindKeyPageNum(k)
-		closer()
-		require.NotEqual(t, nilPageNum, pn)
 		if i%3 == 0 {
 			kvList[i].Value = smallValue
 		} else if i%3 == 1 {
@@ -515,12 +412,12 @@ func TestBitree_IterRange(t *testing.T) {
 		}
 		kvList[i].Key.SetSeqNum(seqNum)
 		seqNum++
-		require.NoError(t, btree.writer.set(*kvList[i].Key, kvList[i].Value, pn, sentinel))
+		require.NoError(t, bw.Apply(*kvList[i].Key, kvList[i].Value))
 	}
-	require.NoError(t, btree.MemFlushFinish())
+	require.NoError(t, bw.Finish())
 	time.Sleep(2 * time.Second)
 
-	rangeLoop := func(o *base.IterOptions, start int) int {
+	rangeLoop := func(o *options.IterOptions, start int) int {
 		iter := btree.newBitreeIter(o)
 		i := start
 		count := 0
@@ -541,7 +438,7 @@ func TestBitree_IterRange(t *testing.T) {
 		return count
 	}
 
-	rangeReverseLoop := func(o *base.IterOptions, start int) int {
+	rangeReverseLoop := func(o *options.IterOptions, start int) int {
 		iter := btree.newBitreeIter(o)
 		i := start
 		count := 0
@@ -564,17 +461,17 @@ func TestBitree_IterRange(t *testing.T) {
 
 	require.Equal(t, keyCount, rangeLoop(nil, 0))
 	require.Equal(t, keyCount, rangeReverseLoop(nil, keyCount-1))
-	ops := &base.IterOptions{
+	ops := &options.IterOptions{
 		LowerBound: kvList[20].Key.UserKey,
 		UpperBound: kvList[50].Key.UserKey,
 	}
 	require.Equal(t, 30, rangeLoop(ops, 20))
 	require.Equal(t, 30, rangeReverseLoop(ops, 49))
-	ops = &base.IterOptions{
+	ops = &options.IterOptions{
 		LowerBound: kvList[30].Key.UserKey,
 	}
 	require.Equal(t, 70, rangeLoop(ops, 30))
-	ops = &base.IterOptions{
+	ops = &options.IterOptions{
 		UpperBound: kvList[50].Key.UserKey,
 	}
 	require.Equal(t, 50, rangeReverseLoop(ops, 49))
@@ -594,17 +491,15 @@ func TestBitree_IterSeek(t *testing.T) {
 	kvList := testMakeSortedKV(keyCount, seqNum, 520)
 	seqNum += uint64(keyCount)
 
-	require.NoError(t, btree.MemFlushStart())
+	bw, err := btree.NewBitreeWriter()
+	require.NoError(t, err)
 	for i := 0; i < keyCount; i++ {
 		if i >= 1 && i < 13 {
 			continue
 		}
-		pn, sentinel, closer := btree.FindKeyPageNum(kvList[i].Key.UserKey)
-		closer()
-		require.NotEqual(t, nilPageNum, pn)
-		require.NoError(t, btree.writer.set(*kvList[i].Key, kvList[i].Value, pn, sentinel))
+		require.NoError(t, bw.Apply(*kvList[i].Key, kvList[i].Value))
 	}
-	require.NoError(t, btree.MemFlushFinish())
+	require.NoError(t, bw.Finish())
 	time.Sleep(2 * time.Second)
 
 	makeByte := func(pos, extra int) []byte {
@@ -643,7 +538,7 @@ func TestBitree_IterSeek(t *testing.T) {
 	iterOp(iter, "SeekGE", makeByte(29, 0), 30)
 	iterOp(iter, "SeekGE", makeByte(49, 1), 50)
 	iterOp(iter, "SeekGE", kvList[99].Key.UserKey, 99)
-	iterOp(iter, "SeekGE", testMakeSortedKey(990), -1)
+	iterOp(iter, "SeekGE", testMakeSortedSlotKey(990), -1)
 	require.NoError(t, iter.Close())
 
 	iter = btree.newBitreeIter(nil)
@@ -651,31 +546,29 @@ func TestBitree_IterSeek(t *testing.T) {
 	iterOp(iter, "SeekLT", makeByte(14, 1), 14)
 	iterOp(iter, "SeekLT", kvList[30].Key.UserKey, 29)
 	iterOp(iter, "SeekLT", kvList[31].Key.UserKey, 30)
-	iterOp(iter, "SeekLT", testMakeSortedKey(990), 99)
+	iterOp(iter, "SeekLT", testMakeSortedSlotKey(990), 99)
 	iterOp(iter, "SeekLT", kvList[0].Key.UserKey, -1)
 	require.NoError(t, iter.Close())
 
-	require.NoError(t, btree.MemFlushStart())
+	bw, err = btree.NewBitreeWriter()
+	require.NoError(t, err)
 	for i := 0; i < keyCount; i++ {
 		if i > 0 && i < 90 {
 			continue
 		}
-		pn, sentinel, closer := btree.FindKeyPageNum(kvList[i].Key.UserKey)
-		closer()
-		require.NotEqual(t, nilPageNum, pn)
 		kvList[i].Key.SetKind(base.InternalKeyKindDelete)
 		kvList[i].Key.SetSeqNum(seqNum)
 		kvList[i].Value = []byte(nil)
 		seqNum++
-		require.NoError(t, btree.writer.set(*kvList[i].Key, kvList[i].Value, pn, sentinel))
+		require.NoError(t, bw.Apply(*kvList[i].Key, kvList[i].Value))
 	}
-	require.NoError(t, btree.MemFlushFinish())
+	require.NoError(t, bw.Finish())
 	time.Sleep(1 * time.Second)
 
 	iter = btree.newBitreeIter(nil)
 	iterOp(iter, "First", nil, 0)
 	iterOp(iter, "Next", nil, 13)
-	iterOp(iter, "SeekGE", testMakeSortedKey(2), 13)
+	iterOp(iter, "SeekGE", testMakeSortedSlotKey(2), 13)
 	iterOp(iter, "Prev", nil, 0)
 	iterOp(iter, "Next", nil, 13)
 	iterOp(iter, "Last", nil, 99)
@@ -694,12 +587,10 @@ func TestBitree_IterCache(t *testing.T) {
 	defer os.RemoveAll(testDir)
 	os.RemoveAll(testDir)
 
-	optspool := base.InitDefaultsOptionsPool()
+	optspool := options.InitDefaultsOptionsPool()
 	optspool.BaseOptions.BitpageFlushSize = 1 << 20
 	optspool.BaseOptions.UseBlockCompress = true
-	bitreeOpts := optspool.Clone(base.BitreeOptionsType).(*base.BitreeOptions)
-	btree, err := NewBitree(testDir, bitreeOpts)
-	require.NoError(t, err)
+	btree, _ := testOpenBitree1(optspool)
 	require.NoError(t, testNewBitreePages(btree))
 
 	keyCount := 10000
@@ -707,20 +598,17 @@ func TestBitree_IterCache(t *testing.T) {
 	kvList := testMakeSortedKV(keyCount, seqNum, 100)
 	seqNum += uint64(keyCount)
 
-	require.NoError(t, btree.MemFlushStart())
+	bw, err := btree.NewBitreeWriter()
+	require.NoError(t, err)
 	for i := 0; i < keyCount; i++ {
-		k := testMakeKey(i)
-		pn, sentinel, closer := btree.FindKeyPageNum(k)
-		closer()
-		require.NotEqual(t, nilPageNum, pn)
 		kvList[i].Key.SetSeqNum(seqNum)
 		seqNum++
-		require.NoError(t, btree.writer.set(*kvList[i].Key, kvList[i].Value, pn, sentinel))
+		require.NoError(t, bw.Apply(*kvList[i].Key, kvList[i].Value))
 	}
-	require.NoError(t, btree.MemFlushFinish())
+	require.NoError(t, bw.Finish())
 	time.Sleep(1 * time.Second)
 
-	rangeLoop := func(o *base.IterOptions) int {
+	rangeLoop := func(o *options.IterOptions) int {
 		iter := btree.newBitreeIter(o)
 		i := 0
 		for ik, val := iter.First(); ik != nil; ik, val = iter.Next() {
@@ -732,7 +620,7 @@ func TestBitree_IterCache(t *testing.T) {
 		return i
 	}
 
-	iterOpts := &base.IterOptions{DisableCache: true}
+	iterOpts := &options.IterOptions{DisableCache: true}
 	require.Equal(t, keyCount, rangeLoop(iterOpts))
 	fmt.Println("start range disable cache", btree.bpage.GetCacheMetrics())
 

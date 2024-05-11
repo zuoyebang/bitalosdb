@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -27,13 +28,23 @@ const (
 	letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 )
 
+func pMem() {
+	var memStats runtime.MemStats
+
+	runtime.ReadMemStats(&memStats)
+
+	fmt.Printf("Allocated memory: %dMB\n", memStats.Alloc/1024/1024)
+	fmt.Printf("Total memory allocated: %dMB\n", memStats.TotalAlloc/1024/1024)
+	fmt.Printf("Memory obtained from OS: %dMB\n", memStats.Sys/1024/1024)
+}
+
 func TestBitrie_String(t *testing.T) {
 	os.Remove("bitrie.db")
 
 	trie := NewBitrie()
 	trie.InitWriter()
 
-	totalNum := 16<<20 + 128
+	totalNum := 1<<20 + 128
 	keylist := make([][]byte, totalNum)
 	valuelist := make([][]byte, totalNum)
 	gomap := make(map[string][]byte, totalNum)
@@ -41,10 +52,17 @@ func TestBitrie_String(t *testing.T) {
 	for i := 0; i < totalNum; i++ {
 		key := fmt.Sprintf("sorted_key_prefix_%s_bitalosdb_%s_%d", randBytes(1), randBytes(16), i)
 		value := []byte(fmt.Sprintf("value_%d", i))
-		gomap[key] = value
 		keylist[i] = []byte(key)
 		valuelist[i] = value
 	}
+
+	pMem()
+
+	for i := 0; i < totalNum; i++ {
+		gomap[string(keylist[i])] = valuelist[i]
+	}
+
+	pMem()
 
 	bt := time.Now()
 	for i := 0; i < totalNum; i++ {

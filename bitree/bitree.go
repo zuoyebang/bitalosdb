@@ -26,7 +26,7 @@ import (
 	"github.com/zuoyebang/bitalosdb/bitpage"
 	"github.com/zuoyebang/bitalosdb/bitree/bdb"
 	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/consts"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 	"github.com/zuoyebang/bitalosdb/internal/statemachine"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 	"github.com/zuoyebang/bitalosdb/internal/vfs"
@@ -38,11 +38,10 @@ type File vfs.File
 var (
 	ErrBdbNotExist    = errors.New("bitree bdb not exist")
 	ErrBucketNotExist = errors.New("bitree bucket not exist")
-	ErrBitreeIterNil  = errors.New("bitree newIter nil")
 )
 
 type Bitree struct {
-	opts           *base.BitreeOptions
+	opts           *options.BitreeOptions
 	closed         bool
 	kvSeparateSize int
 	index          int
@@ -51,14 +50,10 @@ type Bitree struct {
 	bpage          *bitpage.Bitpage
 	bhash          *bithash.Bithash
 	btable         *bitable.Bitable
-	writer         *BitreeWriter
-	bpageTask      *bitpageTask
 	dbState        *statemachine.DbStateMachine
-
-	lastCompactBithashTime uint64
 }
 
-func NewBitree(path string, opts *base.BitreeOptions) (*Bitree, error) {
+func NewBitree(path string, opts *options.BitreeOptions) (*Bitree, error) {
 	var err error
 
 	t := &Bitree{
@@ -91,18 +86,16 @@ func NewBitree(path string, opts *base.BitreeOptions) (*Bitree, error) {
 	opts.BitpageOpts.CheckExpireCB = t.KvCheckExpire
 	opts.BitpageOpts.BithashDeleteCB = t.bithashDelete
 	opts.BitpageOpts.BitableDeleteCB = t.bitableDelete
-	opts.BitpageOpts.PushTaskCB = t.pushTaskData
 	opts.BitpageOpts.Index = t.index
-	bitpagePath := consts.MakeBitpagePath(path, t.index)
+	bitpagePath := base.MakeBitpagepath(path, t.index)
 	t.bpage, err = bitpage.Open(bitpagePath, opts.BitpageOpts)
 	if err != nil {
 		return nil, err
 	}
 
-	opts.BdbOpts.PushTaskCB = t.pushTaskData
 	opts.BdbOpts.CheckPageSplitted = t.checkPageSplitted
 	opts.BdbOpts.Index = t.index
-	bitreePath := consts.MakeBitreeFilePath(path, t.index)
+	bitreePath := base.MakeBitreeFilepath(path, t.index)
 	if err = t.openBdb(bitreePath, opts.BdbOpts); err != nil {
 		return nil, err
 	}
@@ -112,7 +105,7 @@ func NewBitree(path string, opts *base.BitreeOptions) (*Bitree, error) {
 
 	if opts.UseBithash {
 		opts.BithashOpts.Index = t.index
-		bithashPath := consts.MakeBithashPath(path, t.index)
+		bithashPath := base.MakeBithashpath(path, t.index)
 		t.kvSeparateSize = opts.KvSeparateSize
 		t.bhash, err = bithash.Open(bithashPath, opts.BithashOpts)
 		if err != nil {
@@ -123,22 +116,18 @@ func NewBitree(path string, opts *base.BitreeOptions) (*Bitree, error) {
 	if opts.UseBitable {
 		opts.BitableOpts.Index = t.index
 		opts.BitableOpts.CheckExpireCB = t.KvCheckExpire
-		bitablePath := consts.MakeBitablePath(path, t.index)
+		bitablePath := base.MakeBitablepath(path, t.index)
 		t.btable, err = bitable.Open(t.bhash, bitablePath, opts.BitableOpts)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	t.runBitpageTask()
-
 	return t, nil
 }
 
-func (t *Bitree) CloseTask() {
-	if t.bpage != nil {
-		t.bpageTask.close()
-	}
+func (t *Bitree) Index() int {
+	return t.index
 }
 
 func (t *Bitree) Close() error {
@@ -149,7 +138,6 @@ func (t *Bitree) Close() error {
 	t.closed = true
 
 	if t.bpage != nil {
-		t.bpageTask.wg.Wait()
 		_ = t.bpage.Close()
 		t.bpage = nil
 	}
@@ -238,7 +226,7 @@ func (t *Bitree) Exist(key []byte, khash uint32) bool {
 	return iexist
 }
 
-func (t *Bitree) newBitreeIter(o *base.IterOptions) *BitreeIterator {
+func (t *Bitree) newBitreeIter(o *options.IterOptions) *BitreeIterator {
 	iter := &BitreeIterator{
 		btree:      t,
 		cmp:        t.opts.Cmp,
@@ -250,16 +238,14 @@ func (t *Bitree) newBitreeIter(o *base.IterOptions) *BitreeIterator {
 	return iter
 }
 
-func (t *Bitree) NewIters(o *base.IterOptions) (iters []base.InternalIterator) {
-	it := t.newBitreeIter(o)
-	if it != nil {
-		iters = append(iters, it)
-	}
+func (t *Bitree) NewIters(o *options.IterOptions) []base.InternalIterator {
+	iters := make([]base.InternalIterator, 1)
+	iters[0] = t.newBitreeIter(o)
 
 	if t.btable != nil && t.opts.IsFlushedBitableCB() {
-		itBt := t.newBitableIter(o)
-		if itBt != nil {
-			iters = append(iters, itBt)
+		bitableIter := t.newBitableIter(o)
+		if bitableIter != nil {
+			iters = append(iters, bitableIter)
 		}
 	}
 
@@ -274,104 +260,21 @@ func (t *Bitree) IsKvSeparate(len int) bool {
 	return len > t.kvSeparateSize
 }
 
-func (t *Bitree) MemFlushStart() error {
-	bw := &BitreeWriter{
-		btree: t,
-	}
-
-	if t.opts.UseBithash {
-		w, err := t.bhash.FlushStart()
-		if err != nil {
-			return err
-		}
-		bw.bhashWriter = w
-	}
-
-	bw.bpageWriter = make(map[bitpage.PageNum]*bitpage.PageWriter, 1<<4)
-	t.writer = bw
-	return nil
-}
-
-func (t *Bitree) MemFlushFinish() error {
-	if t.writer == nil {
-		return nil
-	}
-
-	if t.writer.bhashWriter != nil {
-		if err := t.bhash.FlushFinish(t.writer.bhashWriter); err != nil {
-			return err
-		}
-		t.writer.bhashWriter = nil
-	}
-
-	for pn, pageWriter := range t.writer.bpageWriter {
-		if err := pageWriter.FlushFinish(); err != nil {
-			t.opts.Logger.Errorf("bitree pageWriter FlushFinish fail pn:%d err:%s", pn, err.Error())
-			continue
-		}
-		pageWriter.UpdateMetaTimestamp()
-		if pageWriter.MaybePageFlush(t.opts.BitpageFlushSize) {
-			task := &base.BitpageTaskData{
-				Event:    base.BitpageEventFlush,
-				Pn:       uint32(pn),
-				Sentinel: pageWriter.Sentinel,
-			}
-			t.pushTaskData(task)
-		}
-	}
-
-	t.writer.bpageWriter = nil
-	t.writer = nil
-	return nil
-}
-
-func (t *Bitree) BatchUpdate(keys []base.InternalKey, values [][]byte) error {
-	if len(keys) != len(values) || len(keys) == 0 {
-		return nil
-	}
-
-	rtx := t.txPool.Load()
-	defer func() {
-		rtx.Unref(true)
-	}()
-
-	bkt := rtx.Bucket()
-	if bkt == nil {
-		return ErrBucketNotExist
-	}
-
-	cursor := bkt.Cursor()
-	for i := 0; i < len(keys); i++ {
-		pn, sentinel := t.findKeyPageNumByCursor(keys[i].UserKey, cursor)
-		if pn == nilPageNum {
-			t.opts.Logger.Errorf("bitree BatchUpdate findKeyPageNum nil index:%d key:%s", t.index, keys[i].String())
-			continue
-		}
-
-		if err := t.writer.set(keys[i], values[i], pn, sentinel); err != nil {
-			t.opts.Logger.Errorf("bitree BatchUpdate set err index:%d key:%s err:%s", t.index, keys[i].String(), err)
-			continue
-		}
-	}
-
-	return nil
-}
-
-func (t *Bitree) Checkpoint(destDir, dbDir string) error {
-	bitpageDest := path.Join(destDir, t.opts.FS.PathBase(consts.MakeBitpagePath(dbDir, t.index)))
-	if err := t.bpage.Checkpoint(bitpageDest); err != nil {
+func (t *Bitree) Checkpoint(fs vfs.FS, destDir, dbDir string) error {
+	bitpageDest := path.Join(destDir, fs.PathBase(base.MakeBitpagepath(dbDir, t.index)))
+	if err := t.bpage.Checkpoint(fs, bitpageDest); err != nil {
 		return err
 	}
 
 	if t.opts.UseBithash {
-		bithashDest := path.Join(destDir, t.opts.FS.PathBase(consts.MakeBithashPath(dbDir, t.index)))
-		if err := t.bhash.Checkpoint(bithashDest); err != nil {
+		bithashDest := fs.PathJoin(destDir, fs.PathBase(base.MakeBithashpath(dbDir, t.index)))
+		if err := t.bhash.Checkpoint(fs, bithashDest); err != nil {
 			return err
 		}
 	}
 
 	if t.btable != nil && t.opts.IsFlushedBitableCB() {
-		bitableDest := path.Join(destDir, t.opts.FS.PathBase(consts.MakeBitablePath(dbDir, t.index)))
+		bitableDest := fs.PathJoin(destDir, fs.PathBase(base.MakeBitablepath(dbDir, t.index)))
 		if err := t.btable.Checkpoint(bitableDest); err != nil {
 			return err
 		}
@@ -444,4 +347,12 @@ func (t *Bitree) KvCheckExpire(key, value []byte) bool {
 	}
 
 	return t.opts.KvCheckExpire(key, dv.UserValue)
+}
+
+func (t *Bitree) GetBitpageCount() int {
+	return t.bpage.GetPageCount()
+}
+
+func (t *Bitree) ManualFlushBitpage() {
+	t.MaybeScheduleFlush(true)
 }

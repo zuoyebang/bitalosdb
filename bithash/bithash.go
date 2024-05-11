@@ -20,14 +20,13 @@ import (
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/compress"
 	"github.com/zuoyebang/bitalosdb/internal/list2"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 	"github.com/zuoyebang/bitalosdb/internal/vfs"
 )
 
 type FS vfs.FS
 type File vfs.File
-
-var FsDefault FS = vfs.Default
 
 type Bithash struct {
 	meta            *BithashMetadata
@@ -58,7 +57,7 @@ type Bithash struct {
 	}
 }
 
-func Open(dirname string, opts *base.BithashOptions) (b *Bithash, err error) {
+func Open(dirname string, opts *options.BithashOptions) (b *Bithash, err error) {
 	b = &Bithash{
 		dirname:         dirname,
 		fs:              opts.FS,

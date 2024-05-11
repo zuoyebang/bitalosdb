@@ -231,9 +231,12 @@ func TestWriteStallEvents(t *testing.T) {
 					}
 				},
 			}
-			d, err := Open("db", &Options{
+			dir := testDirname
+			defer os.RemoveAll(dir)
+			os.RemoveAll(dir)
+			d, err := Open(dir, &Options{
 				EventListener:               listener,
-				FS:                          vfs.NewMem(),
+				FS:                          vfs.Default,
 				MemTableSize:                256 << 10,
 				MemTableStopWritesThreshold: 2,
 			})

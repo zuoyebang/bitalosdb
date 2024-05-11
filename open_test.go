@@ -22,15 +22,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kr/pretty"
 	"github.com/stretchr/testify/require"
+	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/utils"
 	"github.com/zuoyebang/bitalosdb/internal/vfs"
 )
 
 func TestOpenCloseOpenClose(t *testing.T) {
-	root := testDirname
-	os.RemoveAll(root)
-	defer os.RemoveAll(root)
+	dir := testDirname
+	defer os.RemoveAll(dir)
+	os.RemoveAll(dir)
 
 	fs := vfs.Default
 	opts := &Options{FS: fs}
@@ -38,11 +39,11 @@ func TestOpenCloseOpenClose(t *testing.T) {
 	for _, startFromEmpty := range []bool{false, true} {
 		for _, walDirname := range []string{"", "wal"} {
 			for _, length := range []int{-1, 0, 1, 1000, 10000, 100000} {
-				dirname := "sharedDatabase" + walDirname
+				dirname := "/sharedDatabase" + walDirname
 				if startFromEmpty {
-					dirname = "startFromEmpty" + walDirname + strconv.Itoa(length)
+					dirname = "/startFromEmpty" + walDirname + strconv.Itoa(length)
 				}
-				dirname = fs.PathJoin(root, dirname)
+				dirname = fs.PathJoin(dir, dirname)
 				if walDirname == "" {
 					opts.WALDir = ""
 				} else {
@@ -56,15 +57,13 @@ func TestOpenCloseOpenClose(t *testing.T) {
 
 				d0, err := Open(dirname, opts)
 				if err != nil {
-					t.Fatalf("sfe=%t, length=%d: Open #0: %v",
-						startFromEmpty, length, err)
+					t.Fatalf("sfe=%t, length=%d: Open #0: %v", startFromEmpty, length, err)
 					continue
 				}
 				if length >= 0 {
-					err = d0.Set([]byte("key"), []byte(xxx), nil)
+					err = d0.Set(makeTestKey([]byte("key")), []byte(xxx), nil)
 					if err != nil {
-						t.Errorf("sfe=%t, length=%d: Set: %v",
-							startFromEmpty, length, err)
+						t.Errorf("sfe=%t, length=%d: Set: %v", startFromEmpty, length, err)
 						continue
 					}
 				}
@@ -77,16 +76,14 @@ func TestOpenCloseOpenClose(t *testing.T) {
 
 				d1, err := Open(dirname, opts)
 				if err != nil {
-					t.Errorf("sfe=%t, length=%d: Open #1: %v",
-						startFromEmpty, length, err)
+					t.Errorf("sfe=%t, length=%d: Open #1: %v", startFromEmpty, length, err)
 					continue
 				}
 				if length >= 0 {
 					var closer func()
-					got, closer, err = d1.Get([]byte("key"))
+					got, closer, err = d1.Get(makeTestKey([]byte("key")))
 					if err != nil {
-						t.Errorf("sfe=%t, length=%d: Get: %v",
-							startFromEmpty, length, err)
+						t.Errorf("sfe=%t, length=%d: Get: %v", startFromEmpty, length, err)
 						continue
 					}
 					got = append([]byte(nil), got...)
@@ -94,280 +91,174 @@ func TestOpenCloseOpenClose(t *testing.T) {
 				}
 				err = d1.Close()
 				if err != nil {
-					t.Errorf("sfe=%t, length=%d: Close #1: %v",
-						startFromEmpty, length, err)
+					t.Errorf("sfe=%t, length=%d: Close #1: %v", startFromEmpty, length, err)
 					continue
 				}
 
 				if length >= 0 && string(got) != xxx {
-					t.Errorf("sfe=%t, length=%d: got value differs from set value",
-						startFromEmpty, length)
+					t.Errorf("sfe=%t, length=%d: got value differs from set value", startFromEmpty, length)
 					continue
 				}
 			}
-		}
-	}
-}
-
-func TestOpenOptionsCheck(t *testing.T) {
-	opts := &Options{}
-
-	dir := "./data"
-	os.RemoveAll(dir)
-	defer os.RemoveAll(dir)
-
-	d, err := Open(dir, opts)
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-}
-
-func TestOpenReadOnly(t *testing.T) {
-	fs := vfs.Default
-	dir := "data"
-	defer os.RemoveAll(dir)
-	os.RemoveAll(dir)
-	var contents []string
-	{
-		d, err := Open(dir, &Options{
-			FS: fs,
-		})
-		require.NoError(t, err)
-		require.NoError(t, d.Set([]byte("test"), nil, nil))
-		require.NoError(t, d.Close())
-		contents, err = fs.List(dir)
-		require.NoError(t, err)
-		sort.Strings(contents)
-	}
-
-	{
-		d, err := Open(dir, &Options{
-			FS:       fs,
-			ReadOnly: true,
-		})
-		require.NoError(t, err)
-
-		require.EqualValues(t, ErrReadOnly, d.Flush())
-		require.EqualValues(t, ErrReadOnly, func() error { _, err := d.AsyncFlush(); return err }())
-		require.EqualValues(t, ErrReadOnly, d.Delete(nil, nil))
-		require.EqualValues(t, ErrReadOnly, d.LogData(nil, nil))
-		require.EqualValues(t, ErrReadOnly, d.Set([]byte("a"), nil, nil))
-
-		require.NoError(t, func() error {
-			_, closer, err := d.Get([]byte("test"))
-			if closer != nil {
-				closer()
-			}
-			return err
-		}())
-
-		checkIter := func(iter *Iterator) {
-			t.Helper()
-
-			var keys []string
-			for valid := iter.First(); valid; valid = iter.Next() {
-				keys = append(keys, string(iter.Key()))
-			}
-			require.NoError(t, iter.Close())
-			expectedKeys := []string{"test"}
-			if diff := pretty.Diff(keys, expectedKeys); diff != nil {
-				t.Fatalf("%s\n%s", strings.Join(diff, "\n"), keys)
-			}
-		}
-
-		checkIter(d.NewIter(nil))
-
-		b := d.NewIndexedBatch()
-		checkIter(b.NewIter(nil))
-		require.EqualValues(t, ErrReadOnly, b.Commit(nil))
-		require.EqualValues(t, ErrReadOnly, d.Apply(b, nil))
-
-		require.NoError(t, d.Close())
-
-		newContents, err := fs.List(dir)
-		require.NoError(t, err)
-
-		sort.Strings(newContents)
-		if diff := pretty.Diff(contents, newContents); diff != nil {
-			t.Fatalf("%s", strings.Join(diff, "\n"))
 		}
 	}
 }
 
 func TestOpenWALReplay(t *testing.T) {
-	dir := "./data"
+	dir := testDirname
 	defer os.RemoveAll(dir)
 	os.RemoveAll(dir)
 
 	largeValue := []byte(strings.Repeat("a", 100<<10))
-	hugeValue := []byte(strings.Repeat("b", 10<<20))
+	hugeValue := []byte(strings.Repeat("b", 1<<20))
+	keys := make([][]byte, 5)
+	for i := 0; i < 5; i++ {
+		keys[i] = makeTestSlotKey([]byte(fmt.Sprintf("%d", i)))
+	}
+
 	checkIter := func(iter *Iterator) {
 		t.Helper()
 
-		var keys []string
+		i := 0
 		for valid := iter.First(); valid; valid = iter.Next() {
-			keys = append(keys, string(iter.Key()))
+			require.Equal(t, keys[i], iter.Key())
+			i++
 		}
 		require.NoError(t, iter.Close())
-		expectedKeys := []string{"1", "2", "3", "4", "5"}
-		if diff := pretty.Diff(keys, expectedKeys); diff != nil {
-			t.Fatalf("%s\n%s", strings.Join(diff, "\n"), keys)
+	}
+
+	fs := vfs.Default
+	d, err := Open(dir, &Options{
+		FS:           fs,
+		MemTableSize: 32 << 20,
+	})
+	require.NoError(t, err)
+	require.NoError(t, d.Set(keys[0], largeValue, nil))
+	require.NoError(t, d.Set(keys[1], largeValue, nil))
+	require.NoError(t, d.Set(keys[2], largeValue, nil))
+	require.NoError(t, d.Set(keys[3], hugeValue, nil))
+	require.NoError(t, d.Set(keys[4], largeValue, nil))
+	iterOpts := &IterOptions{SlotId: uint32(testSlotId)}
+	checkIter(d.NewIter(iterOpts))
+	require.NoError(t, d.Close())
+
+	index := base.GetBitowerIndex(int(testSlotId))
+	bitower := d.bitowers[index]
+	files, err := d.opts.FS.List(bitower.walDirname)
+	require.NoError(t, err)
+	sort.Strings(files)
+	logCount := 0
+	for _, fname := range files {
+		if strings.HasSuffix(fname, ".log") {
+			logCount++
 		}
 	}
 
-	for _, readOnly := range []bool{false, true} {
-		t.Run(fmt.Sprintf("read-only=%t", readOnly), func(t *testing.T) {
-			fs := vfs.Default
-			d, err := Open(dir, &Options{
-				FS:           fs,
-				MemTableSize: 32 << 20,
-			})
-			require.NoError(t, err)
-			require.NoError(t, d.Set([]byte("1"), largeValue, nil))
-			require.NoError(t, d.Set([]byte("2"), largeValue, nil))
-			require.NoError(t, d.Set([]byte("3"), largeValue, nil))
-			require.NoError(t, d.Set([]byte("4"), hugeValue, nil))
-			require.NoError(t, d.Set([]byte("5"), largeValue, nil))
-			checkIter(d.NewIter(nil))
-			require.NoError(t, d.Close())
-			files, err := fs.List(dir)
-			require.NoError(t, err)
-			sort.Strings(files)
-			logCount := 0
-			for _, fname := range files {
-				if strings.HasSuffix(fname, ".log") {
-					logCount++
-				}
-			}
+	require.Equal(t, 1, logCount)
 
-			require.Equal(t, 1, logCount)
+	d, err = Open(dir, &Options{
+		FS:           fs,
+		MemTableSize: 32 << 20,
+	})
+	require.NoError(t, err)
 
-			d, err = Open(dir, &Options{
-				FS:           fs,
-				MemTableSize: 300 << 10,
-				ReadOnly:     readOnly,
-			})
-			require.NoError(t, err)
-
-			if readOnly {
-				d.mu.Lock()
-				require.NotNil(t, d.mu.mem.mutable)
-				d.mu.Unlock()
-			}
-			checkIter(d.NewIter(nil))
-			require.NoError(t, d.Close())
-		})
-	}
+	checkIter(d.NewIter(iterOpts))
+	require.NoError(t, d.Close())
 }
 
 func TestOpenWALReplay2(t *testing.T) {
-	dir := "./data"
+	dir := testDirname
 	defer os.RemoveAll(dir)
 	os.RemoveAll(dir)
 
-	for _, readOnly := range []bool{false, true} {
-		t.Run(fmt.Sprintf("read-only=%t", readOnly), func(t *testing.T) {
-			for _, reason := range []string{"forced", "size", "large-batch"} {
-				t.Run(reason, func(t *testing.T) {
-					fs := vfs.Default
-					d, err := Open(dir, &Options{
-						FS:           fs,
-						MemTableSize: 256 << 10,
-					})
-					require.NoError(t, err)
+	for _, reason := range []string{"forced", "size"} {
+		t.Run(reason, func(t *testing.T) {
+			fs := vfs.Default
+			d, err := Open(dir, &Options{
+				FS:           fs,
+				MemTableSize: 1 << 20,
+			})
+			require.NoError(t, err)
 
-					switch reason {
-					case "forced":
-						require.NoError(t, d.Set([]byte("1"), nil, nil))
-						require.NoError(t, d.Flush())
-						require.NoError(t, d.Set([]byte("2"), nil, nil))
-					case "size":
-						largeValue := []byte(strings.Repeat("a", 100<<10))
-						require.NoError(t, d.Set([]byte("1"), largeValue, nil))
-						require.NoError(t, d.Set([]byte("2"), largeValue, nil))
-						require.NoError(t, d.Set([]byte("3"), largeValue, nil))
-					case "large-batch":
-						largeValue := []byte(strings.Repeat("a", d.largeBatchThreshold))
-						require.NoError(t, d.Set([]byte("1"), nil, nil))
-						require.NoError(t, d.Set([]byte("2"), largeValue, nil))
-						require.NoError(t, d.Set([]byte("3"), nil, nil))
-					}
-					require.NoError(t, d.Close())
-
-					d, err = Open(dir, &Options{
-						FS:           fs,
-						MemTableSize: 300 << 10,
-						ReadOnly:     readOnly,
-					})
-					require.NoError(t, err)
-					require.NoError(t, d.Close())
-				})
+			switch reason {
+			case "forced":
+				require.NoError(t, d.Set(makeTestKey([]byte("1")), nil, nil))
+				require.NoError(t, d.Flush())
+				require.NoError(t, d.Set(makeTestKey([]byte("2")), nil, nil))
+			case "size":
+				largeValue := []byte(strings.Repeat("a", 100<<10))
+				require.NoError(t, d.Set(makeTestKey([]byte("1")), largeValue, nil))
+				require.NoError(t, d.Set(makeTestKey([]byte("2")), largeValue, nil))
+				require.NoError(t, d.Set(makeTestKey([]byte("3")), largeValue, nil))
 			}
+			require.NoError(t, d.Close())
+			d, err = Open(dir, &Options{
+				FS:           fs,
+				MemTableSize: 1 << 20,
+			})
+			require.NoError(t, err)
+			require.NoError(t, d.Close())
 		})
 	}
 }
 
-func TestOpenWALReplayReadOnlySeqNums(t *testing.T) {
-	fs := vfs.Default
-	const root = "./data"
-	defer os.RemoveAll(root)
-	os.RemoveAll(root)
-
-	dir := fs.PathJoin(root, "original")
-	d, err := Open(dir, &Options{
-		FS:                          fs,
-		MemTableStopWritesThreshold: 3,
-	})
-	require.NoError(t, err)
-	require.NoError(t, d.Set([]byte("a"), nil, nil))
-	require.NoError(t, d.Flush())
-	require.NoError(t, d.Set([]byte("a"), nil, nil))
-	require.NoError(t, d.Flush())
-
-	d.mu.Lock()
-	d.mu.compact.flushing = true
-	d.mu.Unlock()
-
-	require.NoError(t, d.Set([]byte("b"), nil, nil))
-	d.AsyncFlush()
-	require.NoError(t, d.Set([]byte("c"), nil, nil))
-	d.AsyncFlush()
-	require.NoError(t, d.Set([]byte("e"), nil, nil))
-
-	d.mu.Lock()
-	d.mu.compact.flushing = false
-	d.mu.Unlock()
-	require.NoError(t, d.Close())
-
-	d, err = Open(dir, &Options{
-		FS:       fs,
-		ReadOnly: true,
-	})
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-}
-
-func TestOpenWALReplayMemtableGrowth(t *testing.T) {
-	fs := vfs.Default
-	dir := "./data"
+func TestOpenWALReplay3(t *testing.T) {
+	dir := testDirname
 	defer os.RemoveAll(dir)
 	os.RemoveAll(dir)
-	const memTableSize = 64 * 1024 * 1024
-	opts := &Options{
-		MemTableSize: memTableSize,
+
+	fs := vfs.Default
+	d, err := Open(dir, &Options{
 		FS:           fs,
-	}
-	func() {
-		db, err := Open(dir, opts)
-		require.NoError(t, err)
-		defer db.Close()
-		b := db.NewBatch()
-		defer b.Close()
-		key := make([]byte, 8)
-		val := make([]byte, 16*1024*1024)
-		b.Set(key, val, nil)
-		require.NoError(t, db.Apply(b, Sync))
-	}()
-	db, err := Open(dir, opts)
+		MemTableSize: 1 << 20,
+	})
 	require.NoError(t, err)
-	db.Close()
+
+	bitower := d.bitowers[testSlotId]
+	bitowerWalDir := bitower.walDirname
+	bitower.mu.compact.flushing = true
+
+	num := 500
+	val := testRandBytes(1024)
+	for i := 0; i < num; i++ {
+		key := makeTestSlotIntKey(i)
+		require.NoError(t, d.Set(key, val, nil))
+	}
+
+	bitower.mu.compact.flushing = false
+	memNum := len(bitower.mu.mem.queue)
+	require.Equal(t, 5, memNum)
+	require.NoError(t, d.Close())
+
+	var expFns, actFns []FileNum
+	for i := 1; i <= memNum; i++ {
+		expFns = append(expFns, FileNum(i))
+	}
+	ls, _ := fs.List(bitowerWalDir)
+	sort.Strings(ls)
+	for _, filename := range ls {
+		if _, fn, ok := base.ParseFilename(fs, filename); ok {
+			actFns = append(actFns, fn)
+		}
+	}
+	require.Equal(t, expFns, actFns)
+
+	d, err = Open(dir, &Options{
+		FS:           fs,
+		MemTableSize: 1 << 20,
+	})
+	require.NoError(t, err)
+
+	bitower = d.bitowers[testSlotId]
+	require.Equal(t, FileNum(6), bitower.getMinUnflushedLogNum())
+	d.optspool.BaseOptions.DeleteFilePacer.Flush()
+
+	for _, fn := range actFns {
+		walFile := bitower.makeWalFilename(fn)
+		if utils.IsFileExist(walFile) {
+			t.Fatalf("obsolete wal exist file:%s", walFile)
+		}
+	}
+
+	require.NoError(t, d.Close())
 }

@@ -39,6 +39,8 @@ const (
 
 const maxKeyBufCacheSize = 4 << 10
 
+const iterAllFlag = -1
+
 var errReversePrefixIteration = errors.New("bitalosdb: unsupported reverse prefix iteration")
 
 type IteratorMetrics struct {
@@ -63,13 +65,11 @@ type IteratorStats struct {
 var _ redact.SafeFormatter = &IteratorStats{}
 
 type Iterator struct {
-	db                  *DB
 	opts                IterOptions
 	cmp                 Compare
 	equal               Equal
 	split               Split
 	iter                internalIterator
-	readState           *readState
 	err                 error
 	key                 []byte
 	keyBuf              []byte
@@ -80,12 +80,15 @@ type Iterator struct {
 	alloc               *iterAlloc
 	prefixOrFullSeekKey []byte
 	stats               IteratorStats
-	batch               *Batch
 	seqNum              uint64
 	iterValidityState   IterValidityState
 	pos                 iterPos
 	hasPrefix           bool
 	lastPositioningOp   lastPositioningOpKind
+	index               int
+	bitower             *Bitower
+	readState           *readState
+	readStates          []*readState
 }
 
 type lastPositioningOpKind int8
@@ -102,7 +105,6 @@ type IterValidityState int8
 const (
 	IterExhausted IterValidityState = iota
 	IterValid
-	IterAtLimit
 )
 
 func (i *Iterator) findNextEntry() {
@@ -119,17 +121,15 @@ func (i *Iterator) findNextEntry() {
 		}
 
 		switch key.Kind() {
-		case InternalKeyKindDelete:
+		case InternalKeyKindDelete, InternalKeyKindPrefixDelete:
 			i.nextUserKey()
 			continue
-
 		case InternalKeyKindSet:
 			i.keyBuf = append(i.keyBuf[:0], key.UserKey...)
 			i.key = i.keyBuf
 			i.value = i.iterValue
 			i.iterValidityState = IterValid
 			return
-
 		default:
 			i.err = errors.Errorf("bitalosdb: invalid internal key kind %d", key.Kind())
 			i.iterValidityState = IterExhausted
@@ -178,7 +178,7 @@ func (i *Iterator) findPrevEntry() {
 		}
 
 		switch key.Kind() {
-		case InternalKeyKindDelete:
+		case InternalKeyKindDelete, InternalKeyKindPrefixDelete:
 			i.value = nil
 			i.iterValidityState = IterExhausted
 			i.iterKey, i.iterValue = i.iter.Prev()
@@ -242,7 +242,7 @@ func (i *Iterator) SeekGEWithLimit(key []byte) IterValidityState {
 		key = upperBound
 	}
 	seekInternalIter := true
-	if lastPositioningOp == seekGELastPositioningOp && i.batch == nil {
+	if lastPositioningOp == seekGELastPositioningOp {
 		cmp := i.cmp(i.prefixOrFullSeekKey, key)
 		if cmp <= 0 {
 			if i.iterValidityState == IterExhausted ||
@@ -262,7 +262,7 @@ func (i *Iterator) SeekGEWithLimit(key []byte) IterValidityState {
 		i.stats.ForwardSeekCount[InternalIterCall]++
 	}
 	i.findNextEntry()
-	if i.Error() == nil && i.batch == nil {
+	if i.Error() == nil {
 		i.prefixOrFullSeekKey = append(i.prefixOrFullSeekKey[:0], key...)
 		i.lastPositioningOp = seekGELastPositioningOp
 	}
@@ -337,7 +337,7 @@ func (i *Iterator) SeekLTWithLimit(key []byte) IterValidityState {
 		key = lowerBound
 	}
 	seekInternalIter := true
-	if lastPositioningOp == seekLTLastPositioningOp && i.batch == nil {
+	if lastPositioningOp == seekLTLastPositioningOp {
 		cmp := i.cmp(key, i.prefixOrFullSeekKey)
 		if cmp <= 0 {
 			if i.iterValidityState == IterExhausted ||
@@ -357,7 +357,7 @@ func (i *Iterator) SeekLTWithLimit(key []byte) IterValidityState {
 		i.stats.ReverseSeekCount[InternalIterCall]++
 	}
 	i.findPrevEntry()
-	if i.Error() == nil && i.batch == nil {
+	if i.Error() == nil {
 		i.prefixOrFullSeekKey = append(i.prefixOrFullSeekKey[:0], key...)
 		i.lastPositioningOp = seekLTLastPositioningOp
 	}
@@ -519,11 +519,8 @@ func (i *Iterator) Error() error {
 }
 
 func (i *Iterator) Close() error {
-	if i.db != nil {
-		stepCount := i.stats.ForwardStepCount[1] + i.stats.ReverseStepCount[1]
-		if stepCount > consts.IterSlowCountThreshold {
-			i.db.iterSlowCount.Add(1)
-		}
+	if i.bitower != nil && i.getInternalStepCount() > consts.IterSlowCountThreshold {
+		i.bitower.iterSlowCount.Add(1)
 	}
 
 	if i.iter != nil {
@@ -534,6 +531,12 @@ func (i *Iterator) Close() error {
 	if i.readState != nil {
 		i.readState.unref()
 		i.readState = nil
+	} else if i.readStates != nil {
+		for j := range i.readStates {
+			i.readStates[j].unref()
+			i.readStates[j] = nil
+		}
+		i.readStates = nil
 	}
 
 	if alloc := i.alloc; alloc != nil {
@@ -590,31 +593,20 @@ func (i *Iterator) Stats() IteratorStats {
 	return i.stats
 }
 
-func (i *Iterator) Clone() (*Iterator, error) {
-	readState := i.readState
-	if readState == nil {
-		return nil, errors.New("bitalosdb: cannot Clone a closed Iterator")
-	}
+func (i *Iterator) getInternalStepCount() int {
+	return i.stats.ForwardStepCount[1] + i.stats.ReverseStepCount[1]
+}
 
-	readState.ref()
+func (i *Iterator) getInterfaceStepCount() int {
+	return i.stats.ForwardStepCount[0] + i.stats.ReverseStepCount[0]
+}
 
-	buf := iterAllocPool.Get().(*iterAlloc)
-	dbi := &buf.dbi
-	*dbi = Iterator{
-		db:                  i.db,
-		opts:                i.opts,
-		alloc:               buf,
-		cmp:                 i.cmp,
-		equal:               i.equal,
-		iter:                &buf.merging,
-		split:               i.split,
-		readState:           readState,
-		keyBuf:              buf.keyBuf,
-		prefixOrFullSeekKey: buf.prefixOrFullSeekKey,
-		batch:               i.batch,
-		seqNum:              i.seqNum,
-	}
-	return finishInitializingIter(i.db, buf), nil
+func (i *Iterator) getInternalSeekCount() int {
+	return i.stats.ForwardSeekCount[1] + i.stats.ForwardSeekCount[1]
+}
+
+func (i *Iterator) getInterfaceSeekCount() int {
+	return i.stats.ForwardSeekCount[0] + i.stats.ForwardSeekCount[0]
 }
 
 func (stats *IteratorStats) String() string {

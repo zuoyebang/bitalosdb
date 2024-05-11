@@ -37,15 +37,17 @@ func (i DiskSlowInfo) SafeFormat(w redact.SafePrinter, _ rune) {
 }
 
 type FlushInfo struct {
-	JobID      int
-	Reason     string
-	Input      int
-	Iterated   uint64
-	Written    int64
-	keyWritten int64
-	Duration   time.Duration
-	Done       bool
-	Err        error
+	Index               int
+	Reason              string
+	Input               int
+	Iterated            uint64
+	Written             int64
+	keyWritten          int64
+	keyPrefixDeleteKind int64
+	prefixDeleteNum     int64
+	Duration            time.Duration
+	Done                bool
+	Err                 error
 }
 
 func (i FlushInfo) String() string {
@@ -54,27 +56,29 @@ func (i FlushInfo) String() string {
 
 func (i FlushInfo) SafeFormat(w redact.SafePrinter, _ rune) {
 	if i.Err != nil {
-		w.Printf("[JOB %d] flush error: %s", i.JobID, i.Err)
+		w.Printf("[BITOWER %d] flush error: %s", i.Index, i.Err)
 		return
 	}
 
 	if !i.Done {
-		w.Printf("[JOB %d] flushing %d memtable to bitforest", i.JobID, i.Input)
+		w.Printf("[BITOWER %d] flushing %d memtable to bitforest", i.Index, i.Input)
 		return
 	}
 
-	w.Printf("[JOB %d] flushed %d memtable to bitforest iterated(%s) written(%s) keys(%d), in %.3fs, output rate %s/s",
-		i.JobID,
+	w.Printf("[BITOWER %d] flushed %d memtable to bitforest iterated(%s) written(%s) keys(%d) keysPdKind(%d) pdNum(%d), in %.3fs, output rate %s/s",
+		i.Index,
 		i.Input,
 		humanize.Uint64(i.Iterated),
 		humanize.Int64(i.Written),
 		i.keyWritten,
+		i.keyPrefixDeleteKind,
+		i.prefixDeleteNum,
 		i.Duration.Seconds(),
 		humanize.Uint64(uint64(float64(i.Written)/i.Duration.Seconds())))
 }
 
 type WALCreateInfo struct {
-	JobID           int
+	Index           int
 	Path            string
 	FileNum         FileNum
 	RecycledFileNum FileNum
@@ -87,21 +91,21 @@ func (i WALCreateInfo) String() string {
 
 func (i WALCreateInfo) SafeFormat(w redact.SafePrinter, _ rune) {
 	if i.Err != nil {
-		w.Printf("[JOB %d] WAL create error: %s", redact.Safe(i.JobID), i.Err)
+		w.Printf("[BITOWER %d] WAL create error: %s", redact.Safe(i.Index), i.Err)
 		return
 	}
 
 	if i.RecycledFileNum == 0 {
-		w.Printf("[JOB %d] WAL created %s", redact.Safe(i.JobID), redact.Safe(i.FileNum))
+		w.Printf("[BITOWER %d] WAL created %s", redact.Safe(i.Index), redact.Safe(i.FileNum))
 		return
 	}
 
-	w.Printf("[JOB %d] WAL created %s (recycled %s)",
-		redact.Safe(i.JobID), redact.Safe(i.FileNum), redact.Safe(i.RecycledFileNum))
+	w.Printf("[BITOWER %d] WAL created %s (recycled %s)",
+		redact.Safe(i.Index), redact.Safe(i.FileNum), redact.Safe(i.RecycledFileNum))
 }
 
 type WALDeleteInfo struct {
-	JobID   int
+	Index   int
 	Path    string
 	FileNum FileNum
 	Err     error
@@ -113,13 +117,14 @@ func (i WALDeleteInfo) String() string {
 
 func (i WALDeleteInfo) SafeFormat(w redact.SafePrinter, _ rune) {
 	if i.Err != nil {
-		w.Printf("[JOB %d] WAL delete error: %s", redact.Safe(i.JobID), i.Err)
+		w.Printf("[BITOWER %d] WAL delete error: %s", redact.Safe(i.Index), i.Err)
 		return
 	}
-	w.Printf("[JOB %d] WAL deleted %s", redact.Safe(i.JobID), redact.Safe(i.FileNum))
+	w.Printf("[BITOWER %d] WAL deleted %s", redact.Safe(i.Index), redact.Safe(i.FileNum))
 }
 
 type WriteStallBeginInfo struct {
+	Index  int
 	Reason string
 }
 
@@ -128,7 +133,7 @@ func (i WriteStallBeginInfo) String() string {
 }
 
 func (i WriteStallBeginInfo) SafeFormat(w redact.SafePrinter, _ rune) {
-	w.Printf("write stall beginning: %s", redact.Safe(i.Reason))
+	w.Printf("[BITOWER %d] write stall beginning: %s", redact.Safe(i.Index), redact.Safe(i.Reason))
 }
 
 type EventListener struct {

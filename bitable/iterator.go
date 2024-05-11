@@ -18,12 +18,12 @@ import (
 	"encoding/binary"
 
 	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalostable"
+	bt "github.com/zuoyebang/bitalostable"
 )
 
 type BitableIterator struct {
 	btable    *Bitable
-	iter      *bitalostable.Iterator
+	iter      *bt.Iterator
 	iterKey   []byte
 	iterValue []byte
 	ikey      *base.InternalKey

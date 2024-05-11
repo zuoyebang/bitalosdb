@@ -40,8 +40,8 @@ func (w *BithashWriter) Add(ikey base.InternalKey, value []byte) (FileNum, error
 	return fileNum, nil
 }
 
-func (w *BithashWriter) AddIkey(key *InternalKey, value []byte, fileNum FileNum) error {
-	return w.wr.AddIkey(key.Clone(), value, fileNum)
+func (w *BithashWriter) AddIkey(key *InternalKey, value []byte, khash uint32, fileNum FileNum) error {
+	return w.wr.AddIkey(key.Clone(), value, khash, fileNum)
 }
 
 func (w *BithashWriter) maybeSplitTable() error {

@@ -12,27 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package base
+package options
 
 import (
 	"encoding/binary"
 	"os"
 	"time"
 
-	"github.com/zuoyebang/bitalosdb/internal/cache"
+	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/bitask"
 	"github.com/zuoyebang/bitalosdb/internal/compress"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
 	"github.com/zuoyebang/bitalosdb/internal/statemachine"
 	"github.com/zuoyebang/bitalosdb/internal/vfs"
-)
-
-const (
-	BitableOptionsType uint8 = iota
-	BitforestOptionsType
-	BithashOptionsType
-	BitpageOptionsType
-	BitreeBdbOptionsType
-	BitreeOptionsType
 )
 
 var DefaultBitableOptions = &BitableOptions{
@@ -49,8 +41,8 @@ var DefaultBitableOptions = &BitableOptions{
 
 var DefaultBdbOptions = &BdbOptions{
 	Options: &Options{
-		Logger: DefaultLogger,
-		Cmp:    DefaultComparer.Compare,
+		Logger: base.DefaultLogger,
+		Cmp:    base.DefaultComparer.Compare,
 	},
 	Timeout:      0,
 	NoGrowSync:   false,
@@ -58,7 +50,10 @@ var DefaultBdbOptions = &BdbOptions{
 }
 
 var DefaultKeyHashFunc = func(k []byte) int {
-	return int(binary.BigEndian.Uint16(k[:2]))
+	if len(k) < 2 {
+		return int(k[0])
+	}
+	return int(binary.BigEndian.Uint16(k[0:2]))
 }
 
 var DefaultKvCheckExpireFunc = func(id int, k, v []byte) bool { return false }
@@ -76,8 +71,14 @@ var DefaultIOWriteLoadThresholdFunc = func() bool {
 	return true
 }
 
+var DefaultKeyPrefixDeleteFunc = func(k []byte) uint64 {
+	return 0
+}
+
 var TestKvCheckExpireFunc = func(id int, k, v []byte) bool {
-	if v != nil && uint8(v[0]) == 1 {
+	if len(v) == 0 {
+		return false
+	} else if uint8(v[0]) == 1 {
 		timestamp := binary.BigEndian.Uint64(v[1:9])
 		if timestamp == 0 {
 			return false
@@ -103,43 +104,51 @@ var TestKvTimestampFunc = func(v []byte, t uint8) (bool, uint64) {
 	return true, binary.BigEndian.Uint64(v[1:9])
 }
 
+var TestKeyHashFunc = func(k []byte) int {
+	return int(binary.BigEndian.Uint16(k[0:2]))
+}
+
+var TestKeyPrefixDeleteFunc = func(k []byte) uint64 {
+	if len(k) < 10 {
+		return 0
+	}
+	return binary.LittleEndian.Uint64(k[2:10])
+}
+
 type CacheOptions struct {
 	Size     int64
 	Shards   int
 	HashSize int
-	Logger   Logger
+	Logger   base.Logger
 }
 
 type Options struct {
-	Id                int
-	FS                vfs.FS
-	Cmp               Compare
-	Logger            Logger
-	Compressor        compress.Compressor
-	UseBithash        bool
-	UseBitable        bool
-	UseMapIndex       bool
-	UsePrefixCompress bool
-	UseBlockCompress  bool
-	BytesPerSync      int
-	KvSeparateSize    int
-	BitpageFlushSize  uint64
-	BitpageSplitSize  uint64
-	DbState           *statemachine.DbStateMachine
-	KeyHashFunc       func([]byte) int
-	KvCheckExpireFunc func(int, []byte, []byte) bool
-	KvTimestampFunc   func([]byte, uint8) (bool, uint64)
-	DeleteFilePacer   *DeletionFileLimiter
+	Id                    int
+	FS                    vfs.FS
+	Cmp                   base.Compare
+	Logger                base.Logger
+	Compressor            compress.Compressor
+	UseBithash            bool
+	UseBitable            bool
+	UseMapIndex           bool
+	UsePrefixCompress     bool
+	UseBlockCompress      bool
+	BitpageBlockCacheSize int64
+	BytesPerSync          int
+	KvSeparateSize        int
+	BitpageFlushSize      uint64
+	BitpageSplitSize      uint64
+	BitpageTaskPushFunc   func(*bitask.BitpageTaskData)
+	DbState               *statemachine.DbStateMachine
+	DeleteFilePacer       *base.DeletionFileLimiter
+	KeyHashFunc           func([]byte) int
+	KvCheckExpireFunc     func(int, []byte, []byte) bool
+	KvTimestampFunc       func([]byte, uint8) (bool, uint64)
+	KeyPrefixDeleteFunc   func([]byte) uint64
 }
 
 func (o *Options) KvCheckExpire(key, value []byte) bool {
 	return o.KvCheckExpireFunc(o.Id, key, value)
-}
-
-type BitforestOptions struct {
-	*Options
-	Cache     cache.ICache
-	CacheType int
 }
 
 type BdbOptions struct {
@@ -156,7 +165,6 @@ type BdbOptions struct {
 	NoSync            bool
 	OpenFile          func(string, int, os.FileMode) (*os.File, error)
 	Mlock             bool
-	PushTaskCB        func(*BitpageTaskData)
 	CheckPageSplitted func(uint32) bool
 }
 
@@ -169,9 +177,8 @@ type BithashOptions struct {
 type BitpageOptions struct {
 	*Options
 	Index           int
-	PushTaskCB      func(*BitpageTaskData)
 	BithashDeleteCB func(uint32) error
-	BitableDeleteCB func([]byte) (bool, error)
+	BitableDeleteCB func([]byte) error
 	CheckExpireCB   func([]byte, []byte) bool
 }
 
@@ -201,64 +208,44 @@ type BitreeOptions struct {
 }
 
 type OptionsPool struct {
-	BaseOptions      *Options
-	BitableOptions   *BitableOptions
-	BitforestOptions *BitforestOptions
-	BithashOptions   *BithashOptions
-	BitpageOptions   *BitpageOptions
-	BdbOptions       *BdbOptions
-	BitreeOptions    *BitreeOptions
-	DbState          *statemachine.DbStateMachine
+	BaseOptions    *Options
+	BitableOptions *BitableOptions
+	BithashOptions *BithashOptions
+	BitpageOptions *BitpageOptions
+	BdbOptions     *BdbOptions
+	BitreeOptions  *BitreeOptions
+	DbState        *statemachine.DbStateMachine
 }
 
-func (o *OptionsPool) Clone(opt uint8) any {
-	switch opt {
-	case BitforestOptionsType:
-		bfopts := &BitforestOptions{}
-		*bfopts = *(o.BitforestOptions)
-		return bfopts
-	case BithashOptionsType:
-		bhopts := &BithashOptions{}
-		*bhopts = *(o.BithashOptions)
-		return bhopts
-	case BitpageOptionsType:
-		bpopts := &BitpageOptions{}
-		*bpopts = *(o.BitpageOptions)
-		return bpopts
-	case BitreeBdbOptionsType:
-		bdbopts := &BdbOptions{}
-		*bdbopts = *(o.BdbOptions)
-		return bdbopts
-	case BitableOptionsType:
-		btopts := &BitableOptions{}
-		*btopts = *(o.BitableOptions)
-		return btopts
-	case BitreeOptionsType:
-		bropts := &BitreeOptions{}
-		*bropts = *(o.BitreeOptions)
+func (o *OptionsPool) CloneBitreeOptions() *BitreeOptions {
+	bropts := &BitreeOptions{}
+	*bropts = *(o.BitreeOptions)
+	bdbopts := &BdbOptions{}
+	*bdbopts = *(o.BdbOptions)
+	bpopts := &BitpageOptions{}
+	*bpopts = *(o.BitpageOptions)
+	bhopts := &BithashOptions{}
+	*bhopts = *(o.BithashOptions)
+	btopts := &BitableOptions{}
+	*btopts = *(o.BitableOptions)
 
-		bdbopts := &BdbOptions{}
-		*bdbopts = *(o.BdbOptions)
-		bpopts := &BitpageOptions{}
-		*bpopts = *(o.BitpageOptions)
-		bhopts := &BithashOptions{}
-		*bhopts = *(o.BithashOptions)
-		btopts := &BitableOptions{}
-		*btopts = *(o.BitableOptions)
-
-		bropts.BdbOpts = bdbopts
-		bropts.BitpageOpts = bpopts
-		bropts.BithashOpts = bhopts
-		bropts.BitableOpts = btopts
-
-		return bropts
-	default:
-		return nil
-	}
+	bropts.BdbOpts = bdbopts
+	bropts.BitpageOpts = bpopts
+	bropts.BithashOpts = bhopts
+	bropts.BitableOpts = btopts
+	return bropts
 }
 
-func (o *OptionsPool) SetExtraOption(f func()) {
-	f()
+func (o *OptionsPool) CloneBitpageOptions() *BitpageOptions {
+	bpopts := &BitpageOptions{}
+	*bpopts = *(o.BitpageOptions)
+	return bpopts
+}
+
+func (o *OptionsPool) CloneBithashOptions() *BithashOptions {
+	bhopts := &BithashOptions{}
+	*bhopts = *(o.BithashOptions)
+	return bhopts
 }
 
 func (o *OptionsPool) Close() {
@@ -271,29 +258,26 @@ func InitDefaultsOptionsPool() *OptionsPool {
 	}
 
 	optspool.BaseOptions = &Options{
-		FS:                vfs.Default,
-		Cmp:               DefaultComparer.Compare,
-		Logger:            DefaultLogger,
-		Compressor:        compress.NoCompressor,
-		UseBithash:        true,
-		UseBitable:        false,
-		UseMapIndex:       true,
-		UsePrefixCompress: true,
-		UseBlockCompress:  false,
-		BytesPerSync:      consts.DefaultBytesPerSync,
-		KvSeparateSize:    consts.KvSeparateSize,
-		BitpageFlushSize:  consts.BitpageFlushSize,
-		BitpageSplitSize:  consts.BitpageSplitSize,
-		DbState:           optspool.DbState,
-		KeyHashFunc:       DefaultKeyHashFunc,
-		KvCheckExpireFunc: DefaultKvCheckExpireFunc,
-		KvTimestampFunc:   DefaultKvTimestampFunc,
-		DeleteFilePacer:   NewDefaultDeletionFileLimiter(),
-	}
-
-	bfOpts := &BitforestOptions{
-		Options: optspool.BaseOptions,
-		Cache:   nil,
+		FS:                    vfs.Default,
+		Cmp:                   base.DefaultComparer.Compare,
+		Logger:                base.DefaultLogger,
+		Compressor:            compress.NoCompressor,
+		UseBithash:            true,
+		UseBitable:            false,
+		UseMapIndex:           true,
+		UsePrefixCompress:     true,
+		UseBlockCompress:      false,
+		BitpageBlockCacheSize: consts.BitpageDefaultBlockCacheSize,
+		BytesPerSync:          consts.DefaultBytesPerSync,
+		KvSeparateSize:        consts.KvSeparateSize,
+		BitpageFlushSize:      consts.BitpageFlushSize,
+		BitpageSplitSize:      consts.BitpageSplitSize,
+		DbState:               optspool.DbState,
+		DeleteFilePacer:       NewDefaultDeletionFileLimiter(),
+		KeyHashFunc:           DefaultKeyHashFunc,
+		KvCheckExpireFunc:     DefaultKvCheckExpireFunc,
+		KvTimestampFunc:       DefaultKvTimestampFunc,
+		KeyPrefixDeleteFunc:   DefaultKeyPrefixDeleteFunc,
 	}
 
 	brOpts := &BitreeOptions{
@@ -309,15 +293,13 @@ func InitDefaultsOptionsPool() *OptionsPool {
 		NoGrowSync:        true,
 		FreelistType:      consts.BdbFreelistMapType,
 		PageSize:          consts.BdbPageSize,
-		PushTaskCB:        func(*BitpageTaskData) {},
 		CheckPageSplitted: func(uint32) bool { return false },
 	}
 
 	bpOpts := &BitpageOptions{
 		Options:         optspool.BaseOptions,
-		PushTaskCB:      func(*BitpageTaskData) {},
 		BithashDeleteCB: func(uint32) error { return nil },
-		BitableDeleteCB: func([]byte) (bool, error) { return false, nil },
+		BitableDeleteCB: func([]byte) error { return nil },
 		CheckExpireCB:   DefaultCheckExpireFunc,
 	}
 
@@ -330,7 +312,6 @@ func InitDefaultsOptionsPool() *OptionsPool {
 	btOpts.Options = optspool.BaseOptions
 	btOpts.CheckExpireCB = DefaultCheckExpireFunc
 
-	optspool.BitforestOptions = bfOpts
 	optspool.BdbOptions = bdbOpts
 	optspool.BitpageOptions = bpOpts
 	optspool.BitreeOptions = brOpts
@@ -343,14 +324,15 @@ func InitDefaultsOptionsPool() *OptionsPool {
 func InitTestDefaultsOptionsPool() *OptionsPool {
 	optsPool := InitDefaultsOptionsPool()
 	optsPool.BaseOptions.DeleteFilePacer.Run(nil)
+	optsPool.BaseOptions.KeyPrefixDeleteFunc = TestKeyPrefixDeleteFunc
 	return optsPool
 }
 
-func NewDefaultDeletionFileLimiter() *DeletionFileLimiter {
-	dflOpts := &DFLOption{
-		Logger:                 DefaultLogger,
+func NewDefaultDeletionFileLimiter() *base.DeletionFileLimiter {
+	dflOpts := &base.DFLOption{
+		Logger:                 base.DefaultLogger,
 		IOWriteLoadThresholdCB: DefaultIOWriteLoadThresholdFunc,
 		DeleteInterval:         consts.DeletionFileInterval,
 	}
-	return NewDeletionFileLimiter(dflOpts)
+	return base.NewDeletionFileLimiter(dflOpts)
 }

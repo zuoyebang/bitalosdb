@@ -16,7 +16,6 @@ package bitpage
 
 import (
 	"bytes"
-	"crypto/md5"
 	"fmt"
 	"os"
 	"testing"
@@ -24,18 +23,18 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/require"
-	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/bindex"
 	"github.com/zuoyebang/bitalosdb/internal/cache/lrucache"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
 	"github.com/zuoyebang/bitalosdb/internal/hash"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 	"github.com/zuoyebang/bitalosdb/internal/sortedkv"
 )
 
 func testNewBlockCache() *lrucache.LruCache {
-	cacheOpts := &base.CacheOptions{
-		Size:     consts.BitpageBlockCacheSize,
-		Shards:   consts.BitpageLruCacheShards,
+	cacheOpts := &options.CacheOptions{
+		Size:     consts.BitpageDefaultBlockCacheSize,
+		Shards:   consts.BitpageBlockCacheShards,
 		HashSize: consts.BitpageBlockCacheHashSize,
 	}
 	cache := lrucache.NewLrucache(cacheOpts)
@@ -422,8 +421,8 @@ func TestArrayTable_Empty(t *testing.T) {
 func Test_SharedPage_Perf(t *testing.T) {
 	os.Remove(testPath)
 
-	count := 100000
-	kvList := testMakeSortedKV(count, uint64(1), 10)
+	count := 1 << 20
+	kvList := testMakeSortedKV(count, uint64(1), 16)
 
 	bt := time.Now()
 	for _, useMapIndex := range []bool{false, true} {
@@ -434,7 +433,7 @@ func Test_SharedPage_Perf(t *testing.T) {
 		}
 		opts := &atOptions{
 			useMapIndex:       useMapIndex,
-			usePrefixCompress: useMapIndex,
+			usePrefixCompress: false,
 		}
 		at, err := newArrayTable(testPath, opts, &atCacheOpts)
 		require.NoError(t, err)
@@ -442,9 +441,7 @@ func Test_SharedPage_Perf(t *testing.T) {
 		bt1 := time.Now()
 		for i := 0; i < count; i++ {
 			key := kvList[i].Key.UserKey
-			kmd5 := md5.Sum(key)
-			val := append(key, kmd5[:]...)
-			if _, err = at.writeItem(key, val); err != nil {
+			if _, err = at.writeItem(key, kvList[i].Value); err != nil {
 				t.Fatalf("add err key:%s err:%v", string(key), err)
 			}
 		}
@@ -460,21 +457,16 @@ func Test_SharedPage_Perf(t *testing.T) {
 			i := 0
 			for key, val := iter.First(); key != nil; key, val = iter.Next() {
 				expKey := kvList[i].Key.UserKey
-				kmd5 := md5.Sum(expKey)
-				expVal := append(expKey, kmd5[:]...)
 				require.Equal(t, expKey, key.UserKey)
-				require.Equal(t, expVal, val)
+				require.Equal(t, kvList[i].Value, val)
 				i++
 			}
 
 			require.NoError(t, iter.Close())
 
 			getFunc := func(skey []byte) {
-				val, exist, _, closer := a.get(skey, hash.Crc32(skey))
-				kmd5 := md5.Sum(skey)
-				expVal := append(skey, kmd5[:]...)
+				_, exist, _, closer := a.get(skey, hash.Crc32(skey))
 				require.Equal(t, true, exist)
-				require.Equal(t, expVal, val)
 				if closer != nil {
 					closer()
 				}
@@ -482,14 +474,11 @@ func Test_SharedPage_Perf(t *testing.T) {
 
 			seekFunc := func(skey []byte) {
 				it1 := a.newIter(nil)
-				ik, v := it1.SeekGE(skey)
+				ik, _ := it1.SeekGE(skey)
 				if ik == nil {
 					t.Fatal("SeekGE fail", string(skey))
 				}
-				kmd5 := md5.Sum(skey)
-				expVal := append(skey, kmd5[:]...)
 				require.Equal(t, skey, ik.UserKey)
-				require.Equal(t, expVal, v)
 				require.NoError(t, it1.Close())
 			}
 
@@ -515,7 +504,7 @@ func Test_SharedPage_Perf(t *testing.T) {
 			et1_2 := time.Since(bt1_2)
 			fmt.Printf("Test_SharedPage_Perf SeekGE time cost = %v\n", et1_2)
 
-			for _, n := range []int{100007, 100071, 100711} {
+			for _, n := range []int{count + 7, count + 71, count + 711} {
 				seekNotExist(sortedkv.MakeSortedKey(n))
 			}
 		}

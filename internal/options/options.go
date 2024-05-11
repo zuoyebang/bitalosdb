@@ -12,18 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package base
+package options
 
-const (
-	DefaultBlockRestartInterval = 16
-	DefaultBlockSize            = 4096
-	DefaultBlockSizeThreshold   = 90
-)
+import "github.com/zuoyebang/bitalosdb/internal/base"
 
 type IterOptions struct {
 	LowerBound   []byte
 	UpperBound   []byte
-	Logger       Logger
+	Logger       base.Logger
 	SlotId       uint32
 	IsAll        bool
 	DisableCache bool
@@ -43,9 +39,9 @@ func (o *IterOptions) GetUpperBound() []byte {
 	return o.UpperBound
 }
 
-func (o *IterOptions) GetLogger() Logger {
+func (o *IterOptions) GetLogger() base.Logger {
 	if o == nil || o.Logger == nil {
-		return DefaultLogger
+		return base.DefaultLogger
 	}
 	return o.Logger
 }
@@ -55,4 +51,8 @@ func (o *IterOptions) GetSlotId() uint32 {
 		return 0
 	}
 	return o.SlotId
+}
+
+func (o *IterOptions) IsGetAll() bool {
+	return o == nil || o.IsAll
 }

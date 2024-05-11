@@ -20,10 +20,13 @@ import (
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/compress"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 	"github.com/zuoyebang/bitalosdb/internal/vfs"
 )
 
-type IterOptions = base.IterOptions
+type IterOptions = options.IterOptions
+
+var IterAll = IterOptions{IsAll: true}
 
 type WriteOptions struct {
 	Sync bool
@@ -45,7 +48,7 @@ type CompactEnv struct {
 	Interval      int
 }
 
-type BitableOptions = base.BitableOptions
+type BitableOptions = options.BitableOptions
 
 type Options struct {
 	BytesPerSync                int
@@ -54,7 +57,6 @@ type Options struct {
 	EventListener               EventListener
 	MemTableSize                int
 	MemTableStopWritesThreshold int
-	ReadOnly                    bool
 	WALBytesPerSync             int
 	WALDir                      string
 	WALMinSyncInterval          func() time.Duration
@@ -68,7 +70,7 @@ type Options struct {
 	DeleteFileInternal          int
 	UseBithash                  bool
 	UseBitable                  bool
-	BitableOpts                 *base.BitableOptions
+	BitableOpts                 *options.BitableOptions
 	AutoCompact                 bool
 	CompactInfo                 CompactEnv
 	CacheSize                   int64
@@ -78,18 +80,24 @@ type Options struct {
 	UseMapIndex                 bool
 	UsePrefixCompress           bool
 	UseBlockCompress            bool
+	BlockCacheSize              int64
 	FlushReporter               func(int)
-	KeyHashFunc                 func(k []byte) int
+	KeyHashFunc                 func([]byte) int
 	KvCheckExpireFunc           func(int, []byte, []byte) bool
 	KvTimestampFunc             func([]byte, uint8) (bool, uint64)
 	IOWriteLoadThresholdFunc    func() bool
-	private                     struct {
-		logInit bool
+	KeyPrefixDeleteFunc         func([]byte) uint64
+
+	private struct {
+		logInit  bool
+		optspool *options.OptionsPool
 	}
 }
 
-func (o *Options) ensureOptionsPool() *base.OptionsPool {
-	optspool := base.InitDefaultsOptionsPool()
+func (o *Options) ensureOptionsPool(optspool *options.OptionsPool) *options.OptionsPool {
+	if optspool == nil {
+		optspool = options.InitDefaultsOptionsPool()
+	}
 
 	optspool.BaseOptions.Id = o.Id
 	optspool.BaseOptions.FS = o.FS
@@ -102,14 +110,22 @@ func (o *Options) ensureOptionsPool() *base.OptionsPool {
 	optspool.BaseOptions.UseMapIndex = o.UseMapIndex
 	optspool.BaseOptions.UsePrefixCompress = o.UsePrefixCompress
 	optspool.BaseOptions.UseBlockCompress = o.UseBlockCompress
-	if o.KeyHashFunc != nil {
-		optspool.BaseOptions.KeyHashFunc = o.KeyHashFunc
+	optspool.BaseOptions.KeyHashFunc = o.KeyHashFunc
+	optspool.BaseOptions.BitpageBlockCacheSize = consts.BitpageDefaultBlockCacheSize
+	if o.UseBlockCompress && o.BlockCacheSize > 0 {
+		bitpageBlockCacheSize := o.BlockCacheSize / int64(consts.DefaultBitowerNum)
+		if bitpageBlockCacheSize > consts.BitpageDefaultBlockCacheSize {
+			optspool.BaseOptions.BitpageBlockCacheSize = bitpageBlockCacheSize
+		}
 	}
 	if o.KvCheckExpireFunc != nil {
 		optspool.BaseOptions.KvCheckExpireFunc = o.KvCheckExpireFunc
 	}
 	if o.KvTimestampFunc != nil {
 		optspool.BaseOptions.KvTimestampFunc = o.KvTimestampFunc
+	}
+	if o.KeyPrefixDeleteFunc != nil {
+		optspool.BaseOptions.KeyPrefixDeleteFunc = o.KeyPrefixDeleteFunc
 	}
 
 	if o.UseBitable {
@@ -124,7 +140,7 @@ func (o *Options) ensureOptionsPool() *base.OptionsPool {
 	if o.IOWriteLoadThresholdFunc != nil {
 		dflOpts.IOWriteLoadThresholdCB = o.IOWriteLoadThresholdFunc
 	} else {
-		dflOpts.IOWriteLoadThresholdCB = base.DefaultIOWriteLoadThresholdFunc
+		dflOpts.IOWriteLoadThresholdCB = options.DefaultIOWriteLoadThresholdFunc
 	}
 	optspool.BaseOptions.DeleteFilePacer.Run(dflOpts)
 
@@ -144,6 +160,7 @@ func (o *Options) EnsureDefaults() *Options {
 	if o.MemTableSize <= 0 {
 		o.MemTableSize = consts.DefaultMemTableSize
 	}
+	o.MemTableSize = o.MemTableSize / consts.DefaultBitowerNum
 	if o.MemTableStopWritesThreshold <= 0 {
 		o.MemTableStopWritesThreshold = consts.DefaultMemTableStopWritesThreshold
 	}
@@ -168,7 +185,6 @@ func (o *Options) EnsureDefaults() *Options {
 	if o.DeleteFileInternal == 0 {
 		o.DeleteFileInternal = consts.DeletionFileInterval
 	}
-
 	if !o.private.logInit {
 		o.Logger = base.NewLogger(o.Logger, o.LogTag)
 		if o.Verbose {
@@ -178,7 +194,6 @@ func (o *Options) EnsureDefaults() *Options {
 		}
 		o.private.logInit = true
 	}
-
 	if o.FS == nil {
 		o.FS = vfs.WithDiskHealthChecks(vfs.Default, 5*time.Second,
 			func(name string, duration time.Duration) {
@@ -188,7 +203,6 @@ func (o *Options) EnsureDefaults() *Options {
 				})
 			})
 	}
-
 	if o.CompactInfo.StartHour <= 0 {
 		o.CompactInfo.StartHour = 0
 	}
@@ -213,13 +227,14 @@ func (o *Options) EnsureDefaults() *Options {
 	if o.CompactInfo.Interval < consts.MinCompactInterval {
 		o.CompactInfo.Interval = consts.MinCompactInterval
 	}
-
 	if o.UseBitable {
-		o.BitableOpts = base.DefaultBitableOptions
+		o.BitableOpts = options.DefaultBitableOptions
 	}
-
 	if o.IOWriteLoadThresholdFunc == nil {
-		o.IOWriteLoadThresholdFunc = base.DefaultIOWriteLoadThresholdFunc
+		o.IOWriteLoadThresholdFunc = options.DefaultIOWriteLoadThresholdFunc
+	}
+	if o.KeyHashFunc == nil {
+		o.KeyHashFunc = options.DefaultKeyHashFunc
 	}
 
 	return o

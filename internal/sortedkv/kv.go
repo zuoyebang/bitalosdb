@@ -44,22 +44,6 @@ func ParseSortedKeyInt(k []byte) int {
 	return n
 }
 
-func MakeSortedKey(n int) []byte {
-	if n < 0 {
-		return []byte(sortedKeyPrefix)
-	} else {
-		return []byte(sortedKeyPrefix + strconv.Itoa(n))
-	}
-}
-
-func MakeSortedKeyForBitrie(n int) []byte {
-	if n < 0 {
-		return []byte(sortedKeyPrefix)
-	} else {
-		return []byte(sortedKeyPrefix + string(utils.FuncRandBytes(1)) + "_bitalosdb_" + string(utils.FuncRandBytes(64)) + strconv.Itoa(n))
-	}
-}
-
 func MakeSortedKVListForBitrie(start, end int, seqNum uint64, vsize int) SortedKVList {
 	var kvList SortedKVList
 	for i := start; i < end; i++ {
@@ -97,7 +81,7 @@ func MakeSortedKV2List(start, end int, seqNum uint64, vsize int) SortedKVList {
 	for i := start; i < end; i++ {
 		version := uint64(i/10 + 100)
 		slotId := uint16(version % 65535)
-		key := utils.FuncMakeKey2([]byte(sortedKeyPrefix+strconv.Itoa(i)), slotId, version)
+		key := MakeKey2([]byte(sortedKeyPrefix+strconv.Itoa(i)), slotId, version)
 		ikey := base.MakeInternalKey(key, seqNum, base.InternalKeyKindSet)
 		kvList = append(kvList, SortedKVItem{
 			Key:   &ikey,
@@ -110,10 +94,10 @@ func MakeSortedKV2List(start, end int, seqNum uint64, vsize int) SortedKVList {
 	return kvList
 }
 
-func MakeSortedSameKVList(start, end int, seqNum uint64, vsize int, slotId int) SortedKVList {
+func MakeSlotSortedKVList(start, end int, seqNum uint64, vsize int, slotId uint16) SortedKVList {
 	var kvList SortedKVList
 	for i := start; i < end; i++ {
-		key := utils.FuncMakeSameKey([]byte(sortedKeyPrefix+strconv.Itoa(i)), uint16(slotId))
+		key := MakeSlotKey([]byte(sortedKeyPrefix+strconv.Itoa(i)), slotId)
 		ikey := base.MakeInternalKey(key, seqNum, base.InternalKeyKindSet)
 		kvList = append(kvList, SortedKVItem{
 			Key:   &ikey,
@@ -124,4 +108,85 @@ func MakeSortedSameKVList(start, end int, seqNum uint64, vsize int, slotId int) 
 
 	sort.Sort(kvList)
 	return kvList
+}
+
+func MakeSlotSortedKVList2(start, end int, seqNum uint64, vsize int, slotId uint16) SortedKVList {
+	var kvList SortedKVList
+	for i := start; i < end; i++ {
+		version := uint64(i/10 + 100)
+		key := MakeKey2([]byte(sortedKeyPrefix+strconv.Itoa(i)), slotId, version)
+		ikey := base.MakeInternalKey(key, seqNum, base.InternalKeyKindSet)
+		kvList = append(kvList, SortedKVItem{
+			Key:   &ikey,
+			Value: utils.FuncRandBytes(vsize),
+		})
+		seqNum++
+	}
+
+	sort.Sort(kvList)
+	return kvList
+}
+
+func MakeSortedSamePrefixDeleteKVList(start, end int, seqNum uint64, vsize int, slotId uint16) SortedKVList {
+	var kvList SortedKVList
+	for i := start; i < end; i++ {
+		version := uint64(i/10 + 100)
+		var ikey base.InternalKey
+		if version%2 == 0 && IsLastVersionKey(i) {
+			key := MakeKey2(nil, slotId, version)
+			ikey = base.MakeInternalKey(key, seqNum, base.InternalKeyKindPrefixDelete)
+		} else {
+			key := MakeKey2([]byte(sortedKeyPrefix+strconv.Itoa(i)), slotId, version)
+			ikey = base.MakeInternalKey(key, seqNum, base.InternalKeyKindSet)
+		}
+		kvList = append(kvList, SortedKVItem{
+			Key:   &ikey,
+			Value: utils.FuncRandBytes(vsize),
+		})
+		seqNum++
+	}
+
+	sort.Sort(kvList)
+	return kvList
+}
+
+func MakeSortedSamePrefixDeleteKVList2(start, end int, seqNum uint64, vsize int, slotId uint16, versionNum int) SortedKVList {
+	var kvList SortedKVList
+	for i := start; i < end; i++ {
+		version := uint64(i/versionNum + 100)
+		key := MakeKey2([]byte(sortedKeyPrefix+strconv.Itoa(i)), slotId, version)
+		ikey := base.MakeInternalKey(key, seqNum, base.InternalKeyKindSet)
+		kvList = append(kvList, SortedKVItem{
+			Key:   &ikey,
+			Value: utils.FuncRandBytes(vsize),
+		})
+		seqNum++
+	}
+
+	sort.Sort(kvList)
+	return kvList
+}
+
+func MakeSortedSameVersionKVList(start, end int, seqNum uint64, version uint64, vsize int, slotId uint16) SortedKVList {
+	var kvList SortedKVList
+	for i := start; i < end; i++ {
+		key := MakeKey2([]byte(sortedKeyPrefix+strconv.Itoa(i)), slotId, version)
+		ikey := base.MakeInternalKey(key, seqNum, base.InternalKeyKindSet)
+		kvList = append(kvList, SortedKVItem{
+			Key:   &ikey,
+			Value: utils.FuncRandBytes(vsize),
+		})
+		seqNum++
+	}
+
+	sort.Sort(kvList)
+	return kvList
+}
+
+func IsPrefixDeleteKey(version uint64) bool {
+	return version%2 == 0
+}
+
+func IsLastVersionKey(i int) bool {
+	return i%10 == 9
 }
