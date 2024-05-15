@@ -19,7 +19,7 @@ const (
 	DefaultMemTableSize                int   = 512 << 20
 	DefaultMemTableStopWritesThreshold int   = 8
 	DefaultCacheSize                   int64 = 128 << 20
-	DefaultLruCacheShards              int   = 64
+	DefaultLruCacheShards              int   = 128
 	DefaultLruCacheHashSize            int   = 8 * 1024 * DefaultLruCacheShards
 	DefaultLfuCacheShards              int   = 256
 	DefaultBitowerNum                  int   = 8

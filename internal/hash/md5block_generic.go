@@ -12,14 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cache
+//go:build !amd64 && !386 && !arm && !ppc64le && !ppc64 && !s390x && !arm64
 
-type ICache interface {
-	Set([]byte, []byte, uint32) error
-	Delete([]byte, uint32) error
-	ExistAndDelete([]byte, uint32) error
-	Get([]byte, uint32) ([]byte, func(), bool)
-	GetKeyHash([]byte) uint32
-	MetricsInfo() string
-	Close()
+package md5hash
+
+const haveAsm = false
+
+func block(dig *digest, p []byte) {
+	blockGeneric(dig, p)
 }
