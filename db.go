@@ -398,7 +398,7 @@ func finishInitializingIter(d *DB, buf *iterAlloc) *Iterator {
 	}
 
 	if numMergingLevels > cap(mlevels) {
-		mlevels = make([]mergingIterLevel, numMergingLevels)
+		mlevels = make([]mergingIterLevel, 0, numMergingLevels)
 	}
 
 	if batch != nil {
@@ -481,7 +481,7 @@ func (d *DB) Close() error {
 		err = utils.FirstError(err, d.walDir.Close())
 	}
 
-	d.readState.val.unrefLocked()
+	d.readState.val.unref()
 
 	for _, mem := range d.mu.mem.queue {
 		mem.readerUnref()

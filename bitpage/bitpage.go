@@ -241,6 +241,9 @@ func (b *Bitpage) SetPage(pn PageNum, p *page) {
 }
 
 func (b *Bitpage) GetCacheMetrics() string {
+	if b.cache == nil {
+		return ""
+	}
 	return b.cache.MetricsInfo()
 }
 
