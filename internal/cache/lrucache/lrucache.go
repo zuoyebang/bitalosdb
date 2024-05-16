@@ -58,7 +58,6 @@ func (lrc *LruCache) ExistAndDelete(key []byte, _ uint32) error {
 
 func (lrc *LruCache) Get(key []byte, _ uint32) ([]byte, func(), bool) {
 	keyID, keyHash := hash.MD5Uint64(key)
-
 	hd := lrc.getShardByHashId(keyHash).Get(keyID, keyHash)
 	value := hd.Get()
 	if value == nil {
