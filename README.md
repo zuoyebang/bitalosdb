@@ -24,9 +24,7 @@
 
 ## Performance
 
-- This benchmark is based on Bitloasdb version (v4.0) and rocksdb stable version (v7.6.0).
-
-- Bitalosdb v5.0 is under development, and the read performance has been further improved. After internal practice and stable running of v5.0, a new open source version will be released.
+- This benchmark is based on Bitloasdb version (v5.0) and rocksdb stable version (v7.6.0).
 
 ### Hardware
 
