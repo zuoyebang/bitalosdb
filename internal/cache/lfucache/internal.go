@@ -15,8 +15,8 @@
 package lfucache
 
 import (
-	"github.com/zuoyebang/bitalosdb/internal/base"
 	base3 "github.com/zuoyebang/bitalosdb/internal/cache/lfucache/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 )
 
 const (
@@ -30,4 +30,4 @@ const (
 type internalKeyKind = base3.InternalKeyKind
 type internalKey = base3.InternalKey
 type internalIterator = base3.InternalIterator
-type iterOptions = base.IterOptions
+type iterOptions = options.IterOptions

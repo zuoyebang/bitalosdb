@@ -59,7 +59,7 @@ func (a *Arena) alloc(size, align, overflow uint32) (uint32, uint32, error) {
 		return 0, 0, ErrArenaFull
 	}
 
-	padded := uint32(size) + align
+	padded := size + align
 
 	newSize := atomic.AddUint64(&a.n, uint64(padded))
 	if int(newSize)+int(overflow) > len(a.buf) {

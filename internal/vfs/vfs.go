@@ -1,3 +1,17 @@
+// Copyright 2021 The Bitalosdb author(hustxrb@163.com) and other contributors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package vfs
 
 import (
@@ -18,9 +32,6 @@ type File interface {
 	io.Closer
 	io.Reader
 	io.ReaderAt
-	// Unlike the specification for io.Writer.Write(), the vfs.File.Write()
-	// method *is* allowed to modify the slice passed in, whether temporarily
-	// or permanently. Callers of Write() need to take this into account.
 	io.Writer
 	io.Seeker
 	Stat() (os.FileInfo, error)
@@ -239,23 +250,6 @@ func (defaultFS) PathDir(path string) string {
 	return filepath.Dir(path)
 }
 
-type randomReadsOption struct{}
-
-// RandomReadsOption is an OpenOption that optimizes opened file handle for
-// random reads, by calling  fadvise() with POSIX_FADV_RANDOM on Linux systems
-// to disable readahead.
-var RandomReadsOption OpenOption = &randomReadsOption{}
-
-// Apply implements the OpenOption interface.
-func (randomReadsOption) Apply(f File) {
-	type fd interface {
-		Fd() uintptr
-	}
-	if fdFile, ok := f.(fd); ok {
-		_ = fadviseRandom(fdFile.Fd())
-	}
-}
-
 type sequentialReadsOption struct{}
 
 // SequentialReadsOption is an OpenOption that optimizes opened file handle for
@@ -294,27 +288,6 @@ func Copy(fs FS, oldname, newname string) error {
 	return dst.Sync()
 }
 
-// LimitedCopy copies up to maxBytes from oldname to newname. If newname
-// exists, it will be overwritten.
-func LimitedCopy(fs FS, oldname, newname string, maxBytes int64) error {
-	src, err := fs.Open(oldname)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-
-	dst, err := fs.Create(newname)
-	if err != nil {
-		return err
-	}
-	defer dst.Close()
-
-	if _, err := io.Copy(dst, &io.LimitedReader{R: src, N: maxBytes}); err != nil {
-		return err
-	}
-	return dst.Sync()
-}
-
 // LinkOrCopy creates newname as a hard link to the oldname file. If creating
 // the hard link fails, LinkOrCopy falls back to copying the file (which may
 // also fail if newname doesn't exist or oldname already exists).
@@ -335,23 +308,3 @@ func LinkOrCopy(fs FS, oldname, newname string) error {
 	}
 	return Copy(fs, oldname, newname)
 }
-
-// Root returns the base FS implementation, unwrapping all nested FSs that
-// expose an Unwrap method.
-func Root(fs FS) FS {
-	type unwrapper interface {
-		Unwrap() FS
-	}
-
-	for {
-		u, ok := fs.(unwrapper)
-		if !ok {
-			break
-		}
-		fs = u.Unwrap()
-	}
-	return fs
-}
-
-// ErrUnsupported may be returned a FS when it does not support an operation.
-var ErrUnsupported = errors.New("bitalosdb: not supported")

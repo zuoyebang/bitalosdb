@@ -24,14 +24,15 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
 	"github.com/zuoyebang/bitalosdb/internal/hash"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 	"github.com/zuoyebang/bitalosdb/internal/sortedkv"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 )
 
 const testDir = "test"
+const testSlotId uint16 = 1
 
 var nilInternalKey = (*internalKey)(nil)
 
@@ -57,9 +58,9 @@ func testInitDir() {
 	}
 }
 
-func testInitOpts() *base.BitpageOptions {
-	optspool := base.InitTestDefaultsOptionsPool()
-	opts := optspool.Clone(base.BitpageOptionsType).(*base.BitpageOptions)
+func testInitOpts() *options.BitpageOptions {
+	optspool := options.InitTestDefaultsOptionsPool()
+	opts := optspool.CloneBitpageOptions()
 	return opts
 }
 
@@ -86,7 +87,7 @@ func testCloseBitpage(t *testing.T, b *Bitpage) {
 	b.opts.DeleteFilePacer.Close()
 }
 
-func testMakeKey(i int) []byte {
+func makeTestKey(i int) []byte {
 	return []byte(fmt.Sprintf("bitpage_key_%d", i))
 }
 
@@ -251,7 +252,9 @@ func TestBitpage_StMmapExpand(t *testing.T) {
 		require.NoError(t, wr.Set(*kvList1[i].Key, kvList1[i].Value))
 	}
 
+	wr.p.mu.stMutable.grow(consts.BitpageInitMmapSize + 1)
 	require.NoError(t, wr.FlushFinish())
+	require.Equal(t, consts.BitpageInitMmapSize*2, wr.p.mu.stMutable.tbl.Capacity())
 
 	close(closeCh)
 	wg.Wait()
@@ -775,7 +778,7 @@ func TestBitpageCheckpoint(t *testing.T) {
 		dstDir := fmt.Sprintf("%s_ck", testDir)
 		os.RemoveAll(dstDir)
 		defer os.RemoveAll(dstDir)
-		require.NoError(t, bp.Checkpoint(dstDir))
+		require.NoError(t, bp.Checkpoint(bp.opts.FS, dstDir))
 		bp1 := openBitpage(dstDir)
 		pg1 := bp1.GetPage(pn)
 		require.Equal(t, 1, len(pg.mu.stQueue))
@@ -805,7 +808,7 @@ func TestBitpageCheckpoint(t *testing.T) {
 			fmt.Println("checkpoint", i)
 			dstDir = fmt.Sprintf("%s_ck_%d", testDir, i)
 			require.NoError(t, os.RemoveAll(dstDir))
-			require.NoError(t, bp.Checkpoint(dstDir))
+			require.NoError(t, bp.Checkpoint(bp.opts.FS, dstDir))
 			bp1 = openBitpage(dstDir)
 			pg1 = bp1.GetPage(pn)
 			require.Equal(t, 2, len(pg.mu.stQueue))
@@ -872,7 +875,7 @@ func TestBitpageCheckpoint1(t *testing.T) {
 		dstDir := fmt.Sprintf("%s_ck", testDir)
 		os.RemoveAll(dstDir)
 		defer os.RemoveAll(dstDir)
-		require.NoError(t, bp.Checkpoint(dstDir))
+		require.NoError(t, bp.Checkpoint(bp.opts.FS, dstDir))
 		require.Equal(t, consts.BitpageSplitNum+1, bp.GetPageCount())
 		require.Equal(t, true, bp.PageSplitted2(pn))
 		require.Equal(t, true, pg.mu.arrtable != nil)

@@ -37,8 +37,9 @@ import (
 )
 
 const (
-	maxKeySize   = 33 << 10
-	maxValueSize = 16 << 20
+	maxKeySize           = 33 << 10
+	maxValueSize         = 16 << 20
+	blockRestartInterval = 16
 )
 
 type writeCloseSyncer interface {
@@ -106,9 +107,9 @@ func newWriter(b *Bithash, f File, filename string, fileNum FileNum) *Writer {
 		fileNum:       fileNum,
 		dataBlockSize: uint32(b.tableMaxSize),
 		dataBlock:     block2Writer{},
-		indexBlock:    blockWriter{restartInterval: base.DefaultBlockRestartInterval},
-		metaBlock:     blockWriter{restartInterval: base.DefaultBlockRestartInterval},
-		conflictBlock: blockWriter{restartInterval: base.DefaultBlockRestartInterval},
+		indexBlock:    blockWriter{restartInterval: blockRestartInterval},
+		metaBlock:     blockWriter{restartInterval: blockRestartInterval},
+		conflictBlock: blockWriter{restartInterval: blockRestartInterval},
 		indexHash:     make(map[uint32]*hashHandle, 1<<18),
 		indexArray:    make([]hashHandle, 0, 1<<18),
 		conflictKeys:  make(map[string]BlockHandle, 10),
@@ -183,7 +184,7 @@ func (w *Writer) Get(key []byte, khash uint32) ([]byte, func(), error) {
 	}
 
 	length := int(bh.Length)
-	buf, closer := bytepools.DefaultBytePools.GetBytePool(length)
+	buf, closer := bytepools.ReaderBytePools.GetBytePool(length)
 	defer func() {
 		if err != nil {
 			closer()
@@ -239,18 +240,18 @@ func (w *Writer) Add(ikey base.InternalKey, value []byte) error {
 		}
 	}
 
-	return w.add(ikey, compressed, w.fileNum)
+	return w.add(ikey, compressed, hash.Crc32(ikey.UserKey), w.fileNum)
 }
 
-func (w *Writer) AddIkey(ikey InternalKey, value []byte, fileNum FileNum) error {
+func (w *Writer) AddIkey(ikey InternalKey, value []byte, khash uint32, fileNum FileNum) error {
 	if w.err != nil {
 		return w.err
 	}
 
-	return w.add(ikey, value, fileNum)
+	return w.add(ikey, value, khash, fileNum)
 }
 
-func (w *Writer) add(ikey InternalKey, value []byte, fileNum FileNum) error {
+func (w *Writer) add(ikey InternalKey, value []byte, khash uint32, fileNum FileNum) error {
 	if ikey.Size() > maxKeySize {
 		return ErrBhKeyTooLarge
 	} else if len(value) > maxValueSize {
@@ -267,7 +268,7 @@ func (w *Writer) add(ikey InternalKey, value []byte, fileNum FileNum) error {
 	w.currentOffset += length
 	w.meta.Size += length
 	w.meta.keyNum++
-	w.updateHash(ikey, hash.Crc32(ikey.UserKey), bh)
+	w.updateHash(ikey, khash, bh)
 	return nil
 }
 

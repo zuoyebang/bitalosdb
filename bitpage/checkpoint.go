@@ -24,7 +24,7 @@ import (
 	"github.com/zuoyebang/bitalosdb/internal/vfs"
 )
 
-func (b *Bitpage) Checkpoint(dstDir string) (err error) {
+func (b *Bitpage) Checkpoint(fs vfs.FS, dstDir string) (err error) {
 	if _, err = os.Stat(dstDir); !oserror.IsNotExist(err) {
 		return errors.Errorf("bitpage: checkpoint dir exist %s", dstDir)
 	}
@@ -36,7 +36,7 @@ func (b *Bitpage) Checkpoint(dstDir string) (err error) {
 	if err != nil {
 		return err
 	}
-	dir, err = b.opts.FS.OpenDir(dstDir)
+	dir, err = fs.OpenDir(dstDir)
 	if err != nil {
 		return err
 	}
@@ -78,8 +78,8 @@ func (b *Bitpage) Checkpoint(dstDir string) (err error) {
 	}
 
 	for i := range files {
-		newname := path.Join(dstDir, b.opts.FS.PathBase(files[i]))
-		if err = vfs.LinkOrCopy(b.opts.FS, files[i], newname); err != nil {
+		newname := path.Join(dstDir, fs.PathBase(files[i]))
+		if err = vfs.LinkOrCopy(fs, files[i], newname); err != nil {
 			return err
 		}
 		b.opts.Logger.Infof("bitpage checkpoint save %s to %s", files[i], newname)
@@ -87,7 +87,7 @@ func (b *Bitpage) Checkpoint(dstDir string) (err error) {
 
 	metaFile := makeFilepath(b.dirname, fileTypeManifest, 0, 0)
 	metaNewFile := makeFilepath(dstDir, fileTypeManifest, 0, 0)
-	if err = vfs.Copy(b.opts.FS, metaFile, metaNewFile); err != nil {
+	if err = vfs.Copy(fs, metaFile, metaNewFile); err != nil {
 		return err
 	}
 	b.opts.Logger.Infof("bitpage checkpoint save %s to %s", metaFile, metaNewFile)

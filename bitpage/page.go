@@ -19,7 +19,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
 	"github.com/zuoyebang/bitalosdb/internal/invariants"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
@@ -334,7 +333,7 @@ func (p *page) updateReadState() {
 	}
 }
 
-func (p *page) get(key []byte, khash uint32) ([]byte, bool, func(), base.InternalKeyKind) {
+func (p *page) get(key []byte, khash uint32) ([]byte, bool, func(), internalKeyKind) {
 	rs, rsCloser := p.loadReadState()
 
 	stIndex := len(rs.stQueue) - 1
@@ -342,9 +341,10 @@ func (p *page) get(key []byte, khash uint32) ([]byte, bool, func(), base.Interna
 		st := rs.stQueue[stIndex]
 		val, exist, kind, _ := st.get(key, khash)
 		if exist {
-			if kind == internalKeyKindSet {
+			switch kind {
+			case internalKeyKindSet, internalKeyKindPrefixDelete:
 				return val, true, rsCloser, kind
-			} else if kind == internalKeyKindDelete {
+			case internalKeyKindDelete:
 				rsCloser()
 				return nil, false, nil, kind
 			}
@@ -450,9 +450,14 @@ func (p *page) setFlushState(v uint32) {
 	p.flushState.Store(v)
 }
 
-func (p *page) maybeScheduleFlush(flushSize uint64) bool {
+func (p *page) maybeScheduleFlush(flushSize uint64, isForce bool) bool {
 	if !p.canSendFlushTask() {
 		return false
+	}
+
+	if isForce {
+		p.setFlushState(pageFlushStateSendTask)
+		return true
 	}
 
 	itemCount, stSize, stNum, delPercent := p.inuseStState()
@@ -460,7 +465,7 @@ func (p *page) maybeScheduleFlush(flushSize uint64) bool {
 		stNum > 1 ||
 		consts.CheckFlushDelPercent(delPercent, stSize, flushSize) ||
 		consts.CheckFlushItemCount(itemCount, stSize, flushSize) {
-		p.bp.opts.Logger.Infof("pushTask index:%d event:1 pn:%s flushSize:%d stSize:%d stNum:%d delPercent:%.2f itemCount:%d",
+		p.bp.opts.Logger.Infof("[BITPAGE %d] push flush task pn:%s flushSize:%d stSize:%d stNum:%d delPercent:%.2f itemCount:%d",
 			p.bp.index, p.pn, flushSize, stSize, stNum, delPercent, itemCount)
 		p.setFlushState(pageFlushStateSendTask)
 		return true

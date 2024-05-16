@@ -1,3 +1,17 @@
+// Copyright 2021 The Bitalosdb author(hustxrb@163.com) and other contributors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package vfs
 
 import (
@@ -292,8 +306,8 @@ func (y *MemFS) open(fullname string, allowEmptyName bool) (File, error) {
 }
 
 // Open implements FS.Open.
-func (y *MemFS) Open(fullname string, opts ...OpenOption) (File, error) {
-	return y.open(fullname, false /* allowEmptyName */)
+func (y *MemFS) Open(fullname string, _ ...OpenOption) (File, error) {
+	return y.open(fullname, false)
 }
 
 // OpenDir implements FS.OpenDir.
@@ -432,7 +446,7 @@ func (y *MemFS) OpenWR(name string) (File, error) {
 }
 
 // MkdirAll implements FS.MkdirAll.
-func (y *MemFS) MkdirAll(dirname string, perm os.FileMode) error {
+func (y *MemFS) MkdirAll(dirname string, _ os.FileMode) error {
 	return y.walk(dirname, func(dir *memNode, frag string, final bool) error {
 		if frag == "" {
 			if final {
@@ -525,7 +539,7 @@ func (*MemFS) PathDir(p string) string {
 
 // GetDiskUsage implements FS.GetDiskUsage.
 func (*MemFS) GetDiskUsage(string) (DiskUsage, error) {
-	return DiskUsage{}, ErrUnsupported
+	return DiskUsage{}, errors.New("bitalosdb: not supported")
 }
 
 // memNode holds a file's data or a directory's children, and implements os.FileInfo.
@@ -703,7 +717,7 @@ func (f *memFile) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (f *memFile) Seek(offset int64, whence int) (n int64, err error) {
+func (f *memFile) Seek(_ int64, _ int) (n int64, err error) {
 	return n, err
 }
 

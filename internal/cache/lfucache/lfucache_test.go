@@ -24,10 +24,11 @@ import (
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/cache/lrucache"
 	"github.com/zuoyebang/bitalosdb/internal/hash"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 )
 
 func testNewCache() *LfuCache {
-	opts := &base.CacheOptions{
+	opts := &options.CacheOptions{
 		Size:   1 << 20,
 		Shards: 64,
 	}
@@ -36,7 +37,7 @@ func testNewCache() *LfuCache {
 }
 
 func TestFreq(t *testing.T) {
-	opts := &base.CacheOptions{
+	opts := &options.CacheOptions{
 		Size:   1 << 20,
 		Shards: 2,
 	}
@@ -67,7 +68,7 @@ func TestFreq(t *testing.T) {
 
 func TestLfucache_Shards(t *testing.T) {
 	for i := -1; i < 12; i++ {
-		opts := &base.CacheOptions{
+		opts := &options.CacheOptions{
 			Size:   10 << 20,
 			Shards: 2,
 			Logger: base.DefaultLogger,
@@ -79,7 +80,7 @@ func TestLfucache_Shards(t *testing.T) {
 }
 
 func Test_GetIter_VS_GET(t *testing.T) {
-	opts := &base.CacheOptions{
+	opts := &options.CacheOptions{
 		Size:   512 << 20,
 		Shards: 2,
 		Logger: base.DefaultLogger,
@@ -153,7 +154,7 @@ func Test_LFU_VS_LRU(t *testing.T) {
 	totalNum := 1 << 20
 	totalNum_total := totalNum
 
-	opts := &base.CacheOptions{
+	opts := &options.CacheOptions{
 		Size:     512 << 20,
 		Shards:   64,
 		HashSize: totalNum,

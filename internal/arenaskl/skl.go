@@ -59,7 +59,7 @@ var (
 )
 
 func init() {
-	p := float64(1.0)
+	p := 1.0
 	for i := 0; i < maxHeight; i++ {
 		probabilities[i] = uint32(float64(math.MaxUint32) * p)
 		p *= pValue
@@ -237,12 +237,13 @@ func (s *Skiplist) Get(key []byte) ([]byte, bool, base.InternalKeyKind) {
 	}
 
 	kind := base.InternalKeyKind(binary.LittleEndian.Uint64(b[l:]) & 0xff)
-	if kind == base.InternalKeyKindSet {
+	switch kind {
+	case base.InternalKeyKindSet:
 		value := s.arena.getBytes(nd.keyOffset+nd.keySize, nd.valueSize)
 		return value, true, kind
-	} else if kind == base.InternalKeyKindDelete {
+	case base.InternalKeyKindDelete, base.InternalKeyKindPrefixDelete:
 		return nil, true, kind
-	} else {
+	default:
 		return nil, false, base.InternalKeyKindInvalid
 	}
 }

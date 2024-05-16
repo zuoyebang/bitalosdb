@@ -22,7 +22,7 @@ import (
 	"testing"
 
 	"github.com/zuoyebang/bitalosdb/bitree/bdb"
-	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 
 	"golang.org/x/sys/unix"
 )
@@ -30,14 +30,14 @@ import (
 func TestMlock_DbOpen(t *testing.T) {
 	skipOnMemlockLimitBelow(t, 32*1024)
 
-	db := MustOpenWithOption(&base.BdbOptions{Mlock: true})
+	db := MustOpenWithOption(&options.BdbOptions{Mlock: true})
 	defer db.MustClose()
 }
 
 func TestMlock_DbCanGrow_Small(t *testing.T) {
 	skipOnMemlockLimitBelow(t, 32*1024)
 
-	db := MustOpenWithOption(&base.BdbOptions{Mlock: true})
+	db := MustOpenWithOption(&options.BdbOptions{Mlock: true})
 	defer db.MustClose()
 
 	if err := db.Update(func(tx *bdb.Tx) error {
@@ -69,7 +69,7 @@ func TestMlock_DbCanGrow_Big(t *testing.T) {
 	chunksBefore := 64
 	chunksAfter := 64
 
-	db := MustOpenWithOption(&base.BdbOptions{Mlock: true})
+	db := MustOpenWithOption(&options.BdbOptions{Mlock: true})
 	defer db.MustClose()
 
 	for chunk := 0; chunk < chunksBefore; chunk++ {

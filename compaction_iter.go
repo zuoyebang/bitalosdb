@@ -31,9 +31,24 @@ type compactionIter struct {
 	iterValue []byte
 	skip      bool
 	pos       iterPos
+	first     bool
+	end       bool
+}
+
+func (i *compactionIter) IsVisitFirst() bool {
+	return i.first == true
+}
+
+func (i *compactionIter) SetVisitEnd() {
+	i.end = true
+}
+
+func (i *compactionIter) IsVisitEnd() bool {
+	return i.end == true
 }
 
 func (i *compactionIter) First() (*InternalKey, []byte) {
+	i.first = true
 	if i.err != nil {
 		return nil, nil
 	}
@@ -59,7 +74,7 @@ func (i *compactionIter) Next() (*InternalKey, []byte) {
 	i.valid = false
 	for i.iterKey != nil {
 		switch i.iterKey.Kind() {
-		case InternalKeyKindDelete, InternalKeyKindSet:
+		case InternalKeyKindSet, InternalKeyKindDelete, InternalKeyKindPrefixDelete:
 			i.saveKey()
 			i.value = i.iterValue
 			i.valid = true
@@ -145,6 +160,5 @@ func (i *compactionIter) Close() error {
 	if i.err == nil {
 		i.err = err
 	}
-
 	return i.err
 }

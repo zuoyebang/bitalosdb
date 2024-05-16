@@ -786,7 +786,7 @@ func (a *arrayTable) get(key []byte, khash uint32) ([]byte, bool, internalKeyKin
 		}
 
 		var compressedBuf []byte
-		compressedBuf, closer = bytepools.DefaultBytePools.GetMaxBytePool()
+		compressedBuf, closer = bytepools.ReaderBytePools.GetMaxBytePool()
 		blockBuf, _ = compressDecode(compressedBuf, blockBuf)
 		_ = a.blockCache.SetBlock(a.cacheID, uint64(pos), blockBuf)
 	}

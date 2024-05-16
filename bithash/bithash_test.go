@@ -33,6 +33,7 @@ import (
 	"github.com/zuoyebang/bitalosdb/internal/compress"
 	"github.com/zuoyebang/bitalosdb/internal/hash"
 	"github.com/zuoyebang/bitalosdb/internal/list2"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 )
 
 const testdataDir = "test"
@@ -43,13 +44,13 @@ type testKvItem struct {
 	fn FileNum
 }
 
-func testGetBithashOpts(sz int) *base.BithashOptions {
-	opts := &base.BithashOptions{
-		Options: &base.Options{
+func testGetBithashOpts(sz int) *options.BithashOptions {
+	opts := &options.BithashOptions{
+		Options: &options.Options{
 			FS:              testFs,
 			Logger:          base.DefaultLogger,
 			Compressor:      compress.NoCompressor,
-			DeleteFilePacer: base.NewDefaultDeletionFileLimiter(),
+			DeleteFilePacer: options.NewDefaultDeletionFileLimiter(),
 			BytesPerSync:    512 << 10,
 		},
 		TableMaxSize: sz,
@@ -126,23 +127,16 @@ func testBithashClose(t *testing.T, b *Bithash) {
 
 func TestBithashOpen(t *testing.T) {
 	defer os.RemoveAll(testdataDir)
+	os.RemoveAll(testdataDir)
 	b := testOpenBithash()
-
-	for k, v := range b.mufn.fnMap {
-		fmt.Println("b.mufn.fnMap", k, v)
-	}
-
-	key := []byte("ACLS3_APP_CODESEARCH_RESAPI_GETSHARERESOURCEINFO_819308")
+	require.Equal(t, 0, len(b.mufn.fnMap))
+	key := []byte("key")
 	ek := make([]byte, len(key)+4)
 	pos := copy(ek, getSlotIndexBuf(key))
 	copy(ek[pos:], key)
 	khash := hash.Crc32(ek)
-	v, pool, err := b.Get(ek, khash, 5)
-	fmt.Println("bithash get", len(v), err)
-	if pool != nil {
-		pool()
-	}
-
+	_, _, err := b.Get(ek, khash, 5)
+	require.Equal(t, ErrBhFileNumZero, err)
 	testBithashClose(t, b)
 }
 
@@ -275,7 +269,7 @@ func TestBithashCompactAndGet(t *testing.T) {
 		}()
 		i := 0
 		for k, v, fn := iter.First(); iter.Valid(); k, v, fn = iter.Next() {
-			if err = bw.AddIkey(k, v, fn); err != nil {
+			if err = bw.AddIkey(k, v, hash.Crc32(k.UserKey), fn); err != nil {
 				return err
 			}
 			i++
@@ -361,11 +355,10 @@ func TestBithashCompactInterrupt(t *testing.T) {
 		}()
 		i := 0
 		for k, v, fn := iter.First(); iter.Valid(); k, v, fn = iter.Next() {
-			if e = bw.AddIkey(k, v, fn); e != nil {
+			if e = bw.AddIkey(k, v, hash.Crc32(k.UserKey), fn); e != nil {
 				return e
 			}
 			i++
-			// 模拟未写完就异常退出
 			if i == 100 {
 				return nil
 			}
@@ -373,7 +366,6 @@ func TestBithashCompactInterrupt(t *testing.T) {
 		return nil
 	}
 
-	// 选择合适的file文件进行compact
 	for _, fn := range fileNums {
 		err = compactFile(fn)
 		if err != nil {
@@ -381,7 +373,6 @@ func TestBithashCompactInterrupt(t *testing.T) {
 		}
 	}
 
-	// 异常退出后重新打开bithash
 	b = testOpenBithash()
 	filename := MakeFilepath(b.fs, b.dirname, fileTypeTable, newFileNum)
 	_, err = b.fs.Stat(filename)
@@ -815,7 +806,7 @@ func TestBithashMemSize(t *testing.T) {
 	require.NoError(t, err)
 
 	lastFn := FileNum(0)
-	fileNum := make([]int, 200, 200)
+	fileNum := make([]int, 200)
 	totalNum := 20 << 20
 
 	bt := time.Now()
@@ -935,8 +926,8 @@ func TestBithashReadFile(t *testing.T) {
 		return
 	}
 
-	opts := &base.BithashOptions{
-		Options: &base.Options{
+	opts := &options.BithashOptions{
+		Options: &options.Options{
 			FS:         testFs,
 			Logger:     base.DefaultLogger,
 			Compressor: compress.SnappyCompressor,

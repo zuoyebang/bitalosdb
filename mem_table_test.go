@@ -27,10 +27,6 @@ import (
 	"golang.org/x/exp/rand"
 )
 
-func (m *memTable) set(key InternalKey, value []byte) error {
-	return m.skl.Add(key, value)
-}
-
 func (m *memTable) count() (n int) {
 	x := newInternalIterAdapter(m.newIter(nil))
 	for valid := x.First(); valid; valid = x.Next() {
@@ -61,12 +57,27 @@ func ikey(s string) InternalKey {
 	return base.MakeInternalKey([]byte(s), 0, InternalKeyKindSet)
 }
 
+func testNewMemTable() *memTable {
+	opts := &Options{}
+	opts = opts.Clone().EnsureDefaults()
+	return newMemTable(memTableOptions{Options: opts})
+}
+
 func TestMemTableBasic(t *testing.T) {
-	m := newMemTable(memTableOptions{})
+	m := testNewMemTable()
 	if got, want := m.count(), 0; got != want {
 		t.Fatalf("0.count: got %v, want %v", got, want)
 	}
-	v, err := m.getInternal([]byte("cherry"))
+
+	getKey := func(key []byte) ([]byte, error) {
+		v, exist, kind := m.get(key)
+		if exist && kind == base.InternalKeyKindSet {
+			return v, nil
+		}
+		return nil, ErrNotFound
+	}
+
+	v, err := getKey([]byte("cherry"))
 	if string(v) != "" || err != ErrNotFound {
 		t.Fatalf("1.get: got (%q, %v), want (%q, %v)", v, err, "", ErrNotFound)
 	}
@@ -78,11 +89,11 @@ func TestMemTableBasic(t *testing.T) {
 	if got, want := m.count(), 4; got != want {
 		t.Fatalf("2.count: got %v, want %v", got, want)
 	}
-	v, err = m.getInternal([]byte("plum"))
+	v, err = getKey([]byte("plum"))
 	if string(v) != "purple" || err != nil {
 		t.Fatalf("6.get: got (%q, %v), want (%q, %v)", v, err, "purple", error(nil))
 	}
-	v, err = m.getInternal([]byte("lychee"))
+	v, err = getKey([]byte("lychee"))
 	if string(v) != "" || err != ErrNotFound {
 		t.Fatalf("7.get: got (%q, %v), want (%q, %v)", v, err, "", ErrNotFound)
 	}
@@ -108,7 +119,7 @@ func TestMemTableBasic(t *testing.T) {
 }
 
 func TestMemTableCount(t *testing.T) {
-	m := newMemTable(memTableOptions{})
+	m := testNewMemTable()
 	for i := 0; i < 200; i++ {
 		if j := m.count(); j != i {
 			t.Fatalf("count: got %d, want %d", j, i)
@@ -119,7 +130,7 @@ func TestMemTableCount(t *testing.T) {
 }
 
 func TestMemTableBytesIterated(t *testing.T) {
-	m := newMemTable(memTableOptions{})
+	m := testNewMemTable()
 	for i := 0; i < 200; i++ {
 		bytesIterated := m.bytesIterated(t)
 		expected := m.inuseBytes()
@@ -132,7 +143,7 @@ func TestMemTableBytesIterated(t *testing.T) {
 }
 
 func TestMemTableEmpty(t *testing.T) {
-	m := newMemTable(memTableOptions{})
+	m := testNewMemTable()
 	if !m.empty() {
 		t.Errorf("got !empty, want empty")
 	}
@@ -144,7 +155,7 @@ func TestMemTableEmpty(t *testing.T) {
 
 func TestMemTable1000Entries(t *testing.T) {
 	const N = 1000
-	m0 := newMemTable(memTableOptions{})
+	m0 := testNewMemTable()
 	for i := 0; i < N; i++ {
 		k := ikey(strconv.Itoa(i))
 		v := []byte(strings.Repeat("x", i))
@@ -157,8 +168,9 @@ func TestMemTable1000Entries(t *testing.T) {
 	for i := 0; i < 3*N; i++ {
 		j := r.Intn(N)
 		k := []byte(strconv.Itoa(j))
-		v, err := m0.getInternal(k)
-		require.NoError(t, err)
+		v, vexist, vkind := m0.get(k)
+		require.Equal(t, true, vexist)
+		require.Equal(t, base.InternalKeyKindSet, vkind)
 		if len(v) != cap(v) {
 			t.Fatalf("get: j=%d, got len(v)=%d, cap(v)=%d", j, len(v), cap(v))
 		}
@@ -212,7 +224,7 @@ func TestMemTable1000Entries(t *testing.T) {
 }
 
 func buildMemTable(b *testing.B) (*memTable, [][]byte) {
-	m := newMemTable(memTableOptions{})
+	m := testNewMemTable()
 	var keys [][]byte
 	var ikey InternalKey
 	for i := 0; ; i++ {

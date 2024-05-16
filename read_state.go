@@ -17,17 +17,16 @@ package bitalosdb
 import "sync/atomic"
 
 type readState struct {
-	db        *DB
-	refcnt    int32
+	refcnt    atomic.Int32
 	memtables flushableList
 }
 
 func (s *readState) ref() {
-	atomic.AddInt32(&s.refcnt, 1)
+	s.refcnt.Add(1)
 }
 
 func (s *readState) unref() {
-	if atomic.AddInt32(&s.refcnt, -1) != 0 {
+	if s.refcnt.Add(-1) != 0 {
 		return
 	}
 	for _, mem := range s.memtables {
@@ -35,29 +34,28 @@ func (s *readState) unref() {
 	}
 }
 
-func (d *DB) loadReadState() *readState {
-	d.readState.RLock()
-	state := d.readState.val
+func (s *Bitower) loadReadState() *readState {
+	s.readState.RLock()
+	state := s.readState.val
 	state.ref()
-	d.readState.RUnlock()
+	s.readState.RUnlock()
 	return state
 }
 
-func (d *DB) updateReadStateLocked() {
-	s := &readState{
-		db:        d,
-		refcnt:    1,
-		memtables: d.mu.mem.queue,
+func (s *Bitower) updateReadState() {
+	rs := &readState{
+		memtables: s.mu.mem.queue,
 	}
+	rs.refcnt.Store(1)
 
-	for _, mem := range s.memtables {
+	for _, mem := range rs.memtables {
 		mem.readerRef()
 	}
 
-	d.readState.Lock()
-	old := d.readState.val
-	d.readState.val = s
-	d.readState.Unlock()
+	s.readState.Lock()
+	old := s.readState.val
+	s.readState.val = rs
+	s.readState.Unlock()
 
 	if old != nil {
 		old.unref()

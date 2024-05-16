@@ -12,25 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package bitforest
+//go:build amd64 || 386 || arm || ppc64le || ppc64 || s390x || arm64
 
-import (
-	"sync/atomic"
-)
+package hash
 
-type FlushStat struct {
-	FlushMemTime atomic.Int64
-}
+const haveAsm = true
 
-func NewFlushStat() *FlushStat {
-	stat := &FlushStat{}
-	return stat
-}
-
-func (bf *Bitforest) GetFlushMemTime() int64 {
-	return bf.flushStat.FlushMemTime.Load()
-}
-
-func (bf *Bitforest) SetFlushMemTime(t int64) {
-	bf.flushStat.FlushMemTime.Store(t)
-}
+//go:noescape
+func block(dig *digest, p []byte)

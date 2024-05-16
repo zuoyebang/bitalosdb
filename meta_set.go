@@ -17,12 +17,12 @@ package bitalosdb
 import (
 	"sync/atomic"
 
-	"github.com/cockroachdb/errors"
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/manifest"
 )
 
-type metaEdit = manifest.MetaEdit
+type metaEdit = manifest.MetaEditor
+type bitowerMetaEditor = manifest.BitowerMetaEditor
 
 type metaSet struct {
 	atomic struct {
@@ -30,11 +30,9 @@ type metaSet struct {
 		visibleSeqNum uint64
 	}
 
-	minUnflushedLogNum FileNum
-	nextFileNum        FileNum
-	dirname            string
-	opts               *Options
-	meta               *manifest.Metadata
+	dirname string
+	opts    *Options
+	meta    *manifest.Metadata
 }
 
 func (ms *metaSet) init(dirname string, opts *Options) error {
@@ -47,54 +45,20 @@ func (ms *metaSet) init(dirname string, opts *Options) error {
 	ms.dirname = dirname
 	ms.opts = opts
 	ms.meta = meta
-	ms.nextFileNum = 1
-
-	if meta.MinUnflushedLogNum != 0 {
-		ms.minUnflushedLogNum = meta.MinUnflushedLogNum
-	}
-	if meta.NextFileNum != 0 {
-		ms.nextFileNum = meta.NextFileNum
-	}
+	ms.atomic.logSeqNum = 1
 	if meta.LastSeqNum != 0 {
 		ms.atomic.logSeqNum = meta.LastSeqNum + 1
 	}
 
-	ms.markFileNumUsed(ms.minUnflushedLogNum)
-
 	return nil
 }
 
-func (ms *metaSet) markFileNumUsed(fileNum FileNum) {
-	if ms.nextFileNum <= fileNum {
-		ms.nextFileNum = fileNum + 1
-	}
-}
-
-func (ms *metaSet) getNextFileNum() FileNum {
-	x := ms.nextFileNum
-	ms.nextFileNum++
-	return x
-}
-
-func (ms *metaSet) apply(me *metaEdit) error {
-	if me.MinUnflushedLogNum != 0 {
-		if me.MinUnflushedLogNum < ms.minUnflushedLogNum || ms.nextFileNum <= me.MinUnflushedLogNum {
-			return errors.Errorf("inconsistent metaEdit minUnflushedLogNum %s", me.MinUnflushedLogNum)
-		}
-	}
-
-	me.NextFileNum = ms.nextFileNum
+func (ms *metaSet) apply(sme *bitowerMetaEditor) error {
+	me := &metaEdit{}
 	logSeqNum := atomic.LoadUint64(&ms.atomic.logSeqNum)
 	me.LastSeqNum = logSeqNum - 1
-	if logSeqNum == 0 {
-		ms.opts.Logger.Errorf("logSeqNum must be a positive integer: %d", logSeqNum)
-	}
 
-	ms.meta.WriteMetaEdit(me)
-
-	if me.MinUnflushedLogNum != 0 {
-		ms.minUnflushedLogNum = me.MinUnflushedLogNum
-	}
+	ms.meta.Write(me, sme)
 
 	return nil
 }

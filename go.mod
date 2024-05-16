@@ -7,11 +7,11 @@ require (
 	github.com/cockroachdb/errors v1.11.1
 	github.com/cockroachdb/redact v1.1.5
 	github.com/golang/snappy v0.0.4
-	github.com/kr/pretty v0.3.1
-	github.com/stretchr/testify v1.8.4
+	github.com/stretchr/testify v1.9.0
 	github.com/zuoyebang/bitalostable v1.0.0
-	golang.org/x/exp v0.0.0-20211221223016-e29036178569
-	golang.org/x/sys v0.16.0
+	golang.org/x/exp v0.0.0-20240222234643-814bf88cf225
+	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
+	golang.org/x/sys v0.18.0
 )
 
 require (
@@ -24,6 +24,7 @@ require (
 	github.com/getsentry/sentry-go v0.18.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/klauspost/compress v1.15.11 // indirect
+	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect

@@ -25,6 +25,7 @@ import (
 
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/invariants"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 )
 
 type key struct {
@@ -463,7 +464,7 @@ type LruCache struct {
 	}
 }
 
-func newShards(opts *base.CacheOptions) *LruCache {
+func newShards(opts *options.CacheOptions) *LruCache {
 	shardNum := opts.Shards
 	c := &LruCache{
 		refs:     1,

@@ -40,7 +40,6 @@ var memTableEmptySize = func() uint32 {
 
 type memTable struct {
 	cmp        Compare
-	formatKey  base.FormatKey
 	equal      Equal
 	arenaBuf   []byte
 	skl        arenaskl.Skiplist
@@ -75,7 +74,6 @@ func newMemTable(opts memTableOptions) *memTable {
 
 	m := &memTable{
 		cmp:       opts.Comparer.Compare,
-		formatKey: opts.Comparer.FormatKey,
 		equal:     opts.Comparer.Equal,
 		arenaBuf:  opts.arenaBuf,
 		logSeqNum: opts.logSeqNum,
@@ -117,15 +115,11 @@ func (m *memTable) get(key []byte) ([]byte, bool, base.InternalKeyKind) {
 	return m.skl.Get(key)
 }
 
-func (m *memTable) getInternal(key []byte) ([]byte, error) {
-	v, exist, kind := m.skl.Get(key)
-	if exist && kind == base.InternalKeyKindSet {
-		return v, nil
-	}
-	return nil, ErrNotFound
+func (m *memTable) set(key InternalKey, value []byte) error {
+	return m.skl.Add(key, value)
 }
 
-func (m *memTable) prepare(batch *Batch, checkDelPercent bool) error {
+func (m *memTable) prepare(batch *BatchBitower, checkDelPercent bool) error {
 	avail := m.availBytes()
 	if batch.memTableSize > uint64(avail) {
 		return arenaskl.ErrArenaFull
@@ -145,29 +139,32 @@ func (m *memTable) prepare(batch *Batch, checkDelPercent bool) error {
 	return nil
 }
 
-func (m *memTable) apply(batch *Batch, seqNum uint64) error {
+func (m *memTable) apply(batch *BatchBitower, seqNum uint64) error {
 	if seqNum < m.logSeqNum {
 		return errors.Errorf("bitalosdb: batch seqnum %d is less than memtable creation seqnum %d", seqNum, m.logSeqNum)
 	}
 
+	var err error
 	var ins arenaskl.Inserter
+
 	startSeqNum := seqNum
 	for r := batch.Reader(); ; seqNum++ {
 		kind, ukey, value, ok := r.Next()
 		if !ok {
 			break
 		}
-		var err error
-		ikey := base.MakeInternalKey(ukey, seqNum, kind)
+
 		switch kind {
 		case InternalKeyKindLogData:
 			seqNum--
 		default:
+			ikey := base.MakeInternalKey(ukey, seqNum, kind)
 			err = ins.Add(&m.skl, ikey, value)
 		}
 		if err != nil {
 			return err
 		}
+
 		m.totalCnt.Add(1)
 		if kind == InternalKeyKindDelete {
 			m.delCnt.Add(1)

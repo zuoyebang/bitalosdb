@@ -23,31 +23,32 @@ import (
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/hash"
 	"github.com/zuoyebang/bitalosdb/internal/humanize"
-	"github.com/zuoyebang/bitalostable"
+	"github.com/zuoyebang/bitalosdb/internal/options"
+	bt "github.com/zuoyebang/bitalostable"
 	"github.com/zuoyebang/bitalostable/bloom"
 )
 
 type Bitable struct {
-	db    *bitalostable.DB
-	wo    *bitalostable.WriteOptions
+	db    *bt.DB
 	index int
+	wo    *bt.WriteOptions
 	bhash *bithash.Bithash
-	opts  *base.BitableOptions
+	opts  *options.BitableOptions
 }
 
-func Open(bhash *bithash.Bithash, dirname string, opts *base.BitableOptions) (b *Bitable, err error) {
+func Open(bhash *bithash.Bithash, dirname string, opts *options.BitableOptions) (b *Bitable, err error) {
 	b = &Bitable{
 		index: opts.Index,
-		wo:    bitalostable.NoSync,
+		wo:    bt.NoSync,
 		bhash: bhash,
 		opts:  opts,
 	}
 
 	l0Size := opts.L0FileSize
-	lopts := make([]bitalostable.LevelOptions, 7)
+	lopts := make([]bt.LevelOptions, 7)
 	for l := 0; l < 7; l++ {
-		lopts[l] = bitalostable.LevelOptions{
-			Compression:    bitalostable.SnappyCompression,
+		lopts[l] = bt.LevelOptions{
+			Compression:    bt.SnappyCompression,
 			BlockSize:      32 * 1024,
 			TargetFileSize: l0Size,
 			FilterPolicy:   bloom.FilterPolicy(10),
@@ -55,7 +56,7 @@ func Open(bhash *bithash.Bithash, dirname string, opts *base.BitableOptions) (b 
 		l0Size = l0Size * 2
 	}
 
-	btOpts := &bitalostable.Options{
+	btOpts := &bt.Options{
 		MemTableSize:                opts.MemTableSize,
 		MemTableStopWritesThreshold: opts.MemTableStopWritesThreshold,
 		L0CompactionFileThreshold:   opts.L0CompactionFileThreshold,
@@ -70,11 +71,11 @@ func Open(bhash *bithash.Bithash, dirname string, opts *base.BitableOptions) (b 
 		KvCheckExpireFunc:           opts.CheckExpireCB,
 	}
 
-	btCache := bitalostable.NewCache(opts.CacheSize)
+	btCache := bt.NewCache(opts.CacheSize)
 	defer btCache.Unref()
 	btOpts.Cache = btCache
 
-	b.db, err = bitalostable.Open(dirname, btOpts)
+	b.db, err = bt.Open(dirname, btOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +94,7 @@ func (b *Bitable) bithashGet(key []byte, fn uint32) ([]byte, func(), error) {
 
 func (b *Bitable) Get(key []byte) ([]byte, io.Closer, error) {
 	v, closer, err := b.db.Get(key)
-	if err == bitalostable.ErrNotFound {
+	if err == bt.ErrNotFound {
 		return nil, nil, base.ErrNotFound
 	}
 	return v, closer, err
@@ -115,8 +116,8 @@ func (b *Bitable) Metrics() string {
 	return b.db.Metrics().String()
 }
 
-func (b *Bitable) NewIter(o *base.IterOptions) *BitableIterator {
-	btIterOpts := &bitalostable.IterOptions{
+func (b *Bitable) NewIter(o *options.IterOptions) *BitableIterator {
+	btIterOpts := &bt.IterOptions{
 		LowerBound: o.GetLowerBound(),
 		UpperBound: o.GetUpperBound(),
 	}

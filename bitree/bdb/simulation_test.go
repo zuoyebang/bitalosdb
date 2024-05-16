@@ -24,7 +24,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/zuoyebang/bitalosdb/bitree/bdb"
-	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 )
 
 func TestSimulate_1op_1p(t *testing.T)     { testSimulate(t, nil, 1, 1, 1) }
@@ -44,7 +44,7 @@ func TestSimulate_10000op_100p(t *testing.T) { testSimulate(t, nil, 1, 10000, 10
 
 func TestSimulate_10000op_1000p(t *testing.T) { testSimulate(t, nil, 1, 10000, 1000) }
 
-func testSimulate(t *testing.T, openOption *base.BdbOptions, round, threadCount, parallelism int) {
+func testSimulate(t *testing.T, openOption *options.BdbOptions, round, threadCount, parallelism int) {
 	if testing.Short() {
 		t.Skip("skipping test in short mode.")
 	}

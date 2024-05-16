@@ -95,22 +95,7 @@ func (d *DB) Checkpoint(destDir string, opts ...CheckpointOption) (ckErr error) 
 		return err
 	}
 
-	if opt.flushWAL && !d.opts.DisableWAL {
-		if err := d.LogData(nil /* data */, Sync); err != nil {
-			return err
-		}
-	}
-
-	d.mu.Lock()
-	d.disableFileDeletions()
-	defer func() {
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		d.enableFileDeletions()
-	}()
-
-	memQueue := d.mu.mem.queue
-	d.mu.Unlock()
+	isSync := opt.flushWAL && !d.opts.DisableWAL
 
 	fs := vfs.WithSyncingFS(d.opts.FS, vfs.SyncingFileOptions{
 		BytesPerSync: d.opts.BytesPerSync,
@@ -134,37 +119,19 @@ func (d *DB) Checkpoint(destDir string, opts ...CheckpointOption) (ckErr error) 
 		return ckErr
 	}
 
-	{
-		srcPath := base.MakeFilepath(fs, d.dirname, fileTypeMeta, 0)
-		destFile := fs.PathJoin(destDir, fs.PathBase(srcPath))
-		err := vfs.Copy(fs, srcPath, destFile)
-		if err != nil {
-			return err
-		}
+	srcPath := base.MakeFilepath(fs, d.dirname, fileTypeMeta, 0)
+	destFile := fs.PathJoin(destDir, fs.PathBase(srcPath))
+	if ckErr = vfs.Copy(fs, srcPath, destFile); ckErr != nil {
+		return ckErr
 	}
 
-	for i := range memQueue {
-		logNum := memQueue[i].logNum
-		if logNum == 0 {
-			continue
-		}
-		srcPath := base.MakeFilepath(fs, d.walDirname, fileTypeLog, logNum)
-		destPath := fs.PathJoin(destDir, fs.PathBase(srcPath))
-		ckErr = vfs.Copy(fs, srcPath, destPath)
-		if ckErr != nil {
+	for i := range d.bitowers {
+		if ckErr = d.bitowers[i].checkpoint(fs, destDir, isSync); ckErr != nil {
 			return ckErr
 		}
 	}
 
-	{
-		ckErr = d.bf.Checkpoint(destDir)
-		if ckErr != nil {
-			return ckErr
-		}
-	}
-
-	ckErr = dir.Sync()
-	if ckErr != nil {
+	if ckErr = dir.Sync(); ckErr != nil {
 		return ckErr
 	}
 	ckErr = dir.Close()
@@ -183,5 +150,5 @@ func (d *DB) SetCheckpointLock(lock bool) {
 }
 
 func (d *DB) SetCheckpointHighPriority(v bool) {
-	d.dbState.SetHighPriority(v)
+	d.dbState.SetDbHighPriority(v)
 }

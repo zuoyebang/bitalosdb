@@ -16,18 +16,20 @@ package bitpage
 
 import (
 	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 )
 
 const (
-	internalKeyKindDelete  = base.InternalKeyKindDelete
-	internalKeyKindSet     = base.InternalKeyKindSet
-	internalKeySeqNumMax   = base.InternalKeySeqNumMax
-	internalKeyKindInvalid = base.InternalKeyKindInvalid
+	internalKeyKindDelete       = base.InternalKeyKindDelete
+	internalKeyKindSet          = base.InternalKeyKindSet
+	internalKeyKindSetBithash   = base.InternalKeyKindSetBithash
+	internalKeyKindPrefixDelete = base.InternalKeyKindPrefixDelete
+	internalKeyKindInvalid      = base.InternalKeyKindInvalid
 )
 
 type internalKeyKind = base.InternalKeyKind
 type internalKey = base.InternalKey
 type internalIterator = base.InternalIterator
-type iterOptions = base.IterOptions
+type iterOptions = options.IterOptions
 
 var iterCompactOpts = iterOptions{DisableCache: true}

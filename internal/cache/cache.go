@@ -15,11 +15,11 @@
 package cache
 
 type ICache interface {
-	Set(key, value []byte, khash uint32) error
-	Delete(key []byte, khash uint32) error
-	ExistAndDelete(key []byte, khash uint32) error
-	Get(key []byte, khash uint32) ([]byte, func(), bool)
-	GetKeyHash(key []byte) uint32
+	Set([]byte, []byte, uint32) error
+	Delete([]byte, uint32) error
+	ExistAndDelete([]byte, uint32) error
+	Get([]byte, uint32) ([]byte, func(), bool)
+	GetKeyHash([]byte) uint32
 	MetricsInfo() string
 	Close()
 }

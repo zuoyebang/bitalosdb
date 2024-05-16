@@ -24,6 +24,7 @@ import (
 	"os"
 
 	"github.com/cockroachdb/errors/oserror"
+	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 )
 
@@ -50,8 +51,8 @@ const (
 )
 
 const (
-	compactMaxFileNum  = 32
-	compactMaxMiniSize = 64 << 20
+	compactMaxFileNum  = 8
+	compactMaxMiniSize = 50 << 20
 )
 
 type CompactFiles struct {
@@ -60,7 +61,7 @@ type CompactFiles struct {
 	Size       int64
 }
 
-func (b *Bithash) CheckFilesDelPercent(jobId int, cfgPercent float64) []CompactFiles {
+func (b *Bithash) CheckFilesDelPercent(cfgPercent float64) []CompactFiles {
 	var compactFiles []CompactFiles
 	var findNum int
 
@@ -74,7 +75,7 @@ func (b *Bithash) CheckFilesDelPercent(jobId int, cfgPercent float64) []CompactF
 
 		delPercent := float64(fileMeta.delKeyNum) / float64(fileMeta.keyNum)
 		if delPercent >= cfgPercent {
-			b.logger.Infof("[COMPACTBITHASH %d] [tree:%d] CheckFilesDelPercent %s delPercent:%.4f cfgPercent:%.2f", jobId, b.index, fileMeta, delPercent, cfgPercent)
+			b.logger.Infof("[COMPACTBITHASH %d] checkFilesDelPercent %s delPercent:%.4f cfgPercent:%.2f", b.index, fileMeta, delPercent, cfgPercent)
 			compactFiles = append(compactFiles, CompactFiles{
 				FileNum:    fn,
 				DelPercent: delPercent,
@@ -89,7 +90,7 @@ func (b *Bithash) CheckFilesDelPercent(jobId int, cfgPercent float64) []CompactF
 	return compactFiles
 }
 
-func (b *Bithash) CheckFilesMiniSize(jobId int) []CompactFiles {
+func (b *Bithash) CheckFilesMiniSize() []CompactFiles {
 	var compactFiles []CompactFiles
 
 	b.meta.mu.RLock()
@@ -102,9 +103,7 @@ func (b *Bithash) CheckFilesMiniSize(jobId int) []CompactFiles {
 
 		fileSize := b.fileSize(fn)
 		if fileSize <= compactMaxMiniSize {
-			b.logger.Infof("[COMPACTBITHASH %d] [tree:%d] CheckFilesMiniSize %s fileSize:%s",
-				jobId, b.index, fileMeta,
-				utils.FmtSize(uint64(fileSize)))
+			b.logger.Infof("[COMPACTBITHASH %d] checkFilesMiniSize %s fileSize:%s", b.index, fileMeta, utils.FmtSize(uint64(fileSize)))
 			compactFiles = append(compactFiles, CompactFiles{
 				FileNum: fn,
 				Size:    fileSize,
@@ -161,7 +160,8 @@ func initCompactLog(b *Bithash) (err error) {
 		return err
 	}
 
-	b.logger.Infof("open compactLog file filename:%s writeOffset:%d readOffset:%d", filename, w.writeOffset, w.readOffset)
+	b.logger.Infof("[BITHASH %d] open compactLog file filename:%s writeOffset:%d readOffset:%d",
+		b.index, base.GetFilePathBase(filename), w.writeOffset, w.readOffset)
 
 	b.cLogWriter = w
 
@@ -292,8 +292,8 @@ func initFileNumMap(b *Bithash) error {
 		return err
 	}
 
-	b.logger.Infof("bithash initFileNumMap success compactLog readOffset:%d writeOffset:%d",
-		b.cLogWriter.readOffset, b.cLogWriter.writeOffset)
+	b.logger.Infof("[BITHASH %d] initFileNumMap success compactLog readOffset:%d writeOffset:%d",
+		b.index, b.cLogWriter.readOffset, b.cLogWriter.writeOffset)
 
 	return nil
 }

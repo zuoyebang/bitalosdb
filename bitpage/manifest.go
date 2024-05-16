@@ -101,7 +101,7 @@ func openManifest(b *Bitpage) error {
 		return err
 	}
 
-	b.opts.Logger.Infof("bitpage openManifest success index:%d version:%d len:%d uses:%d frees:%d",
+	b.opts.Logger.Infof("[BITPAGE %d] open manifest success version:%d len:%d uses:%d frees:%d",
 		b.index,
 		b.meta.version,
 		b.meta.mu.manifest.Len(),

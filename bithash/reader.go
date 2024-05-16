@@ -22,8 +22,9 @@ import (
 	"runtime/debug"
 
 	"github.com/cockroachdb/errors"
-	"github.com/zuoyebang/bitalosdb/internal/bindex"
 	"github.com/zuoyebang/bitalosdb/internal/bytepools"
+
+	"github.com/zuoyebang/bitalosdb/internal/bindex"
 	"github.com/zuoyebang/bitalosdb/internal/vfs"
 )
 
@@ -239,7 +240,7 @@ func (r *Reader) readData(bh BlockHandle) ([]byte, func(), error) {
 	var v []byte
 	var n int
 
-	buf, closer := bytepools.DefaultBytePools.GetBytePool(int(bh.Length))
+	buf, closer := bytepools.ReaderBytePools.GetBytePool(int(bh.Length))
 	defer func() {
 		if err != nil {
 			closer()

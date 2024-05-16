@@ -17,124 +17,125 @@ package bitalosdb
 import (
 	"context"
 	"errors"
-	"io"
 	"runtime/debug"
 	"runtime/pprof"
 	"sort"
-	"sync/atomic"
 
 	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/bitask"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 )
 
 var errFlushInvariant = errors.New("bitalosdb: flush next log number is unset")
 var flushLabels = pprof.Labels("bitalosdb", "flush")
 
+type fileInfo struct {
+	fileNum  FileNum
+	fileSize uint64
+}
+
 type compaction struct {
 	cmp                 Compare
-	formatKey           base.FormatKey
 	logger              Logger
-	score               float64
-	maxOutputFileSize   uint64
-	maxOverlapBytes     uint64
 	flushing            flushableList
 	bytesIterated       uint64
 	bytesWritten        int64
 	keyWritten          int64
-	atomicBytesIterated *uint64
-	closers             []io.Closer
+	keyPrefixDeleteKind int64
+	prefixDeleteNum     int64
 }
 
-func newFlush(opts *Options, flushing flushableList, bytesFlushed *uint64) *compaction {
+func newFlush(opts *Options, flushing flushableList) *compaction {
 	return &compaction{
-		cmp:                 opts.Comparer.Compare,
-		formatKey:           opts.Comparer.FormatKey,
-		logger:              opts.Logger,
-		flushing:            flushing,
-		atomicBytesIterated: bytesFlushed,
+		cmp:      opts.Comparer.Compare,
+		logger:   opts.Logger,
+		flushing: flushing,
 	}
 }
 
-func (c *compaction) newInputIter() (_ internalIterator, retErr error) {
+func (c *compaction) newInputIter() internalIterator {
 	if len(c.flushing) == 1 {
 		f := c.flushing[0]
 		iter := f.newFlushIter(nil, &c.bytesIterated)
-		return iter, nil
+		return iter
 	}
 	iters := make([]internalIterator, 0, len(c.flushing))
 	for i := range c.flushing {
 		f := c.flushing[i]
 		iters = append(iters, f.newFlushIter(nil, &c.bytesIterated))
 	}
-	return newMergingIter(c.logger, c.cmp, nil, iters...), nil
+	return newMergingIter(c.logger, c.cmp, iters...)
 }
 
 func (c *compaction) String() string {
-	return "flush\n"
+	return "memtable flush\n"
 }
 
-func (d *DB) maybeScheduleFlush(needReport bool) {
-	if d.mu.compact.flushing || d.IsClosed() || d.opts.ReadOnly {
-		return
-	}
-	if len(d.mu.mem.queue) <= 1 {
-		return
-	}
-
-	if !d.passedFlushThreshold() {
-		return
-	}
-
-	d.mu.compact.flushing = true
-	go d.flush(needReport)
-}
-
-func (d *DB) passedFlushThreshold() bool {
+func (s *Bitower) passedFlushThreshold() bool {
 	var n int
 	var size uint64
-	for ; n < len(d.mu.mem.queue)-1; n++ {
-		if !d.mu.mem.queue[n].readyForFlush() {
+	for ; n < len(s.mu.mem.queue)-1; n++ {
+		if !s.mu.mem.queue[n].readyForFlush() {
 			break
 		}
-		if d.mu.mem.queue[n].flushForced {
-			size += uint64(d.opts.MemTableSize)
+		if s.mu.mem.queue[n].flushForced {
+			size += uint64(s.memTableSize)
 		} else {
-			size += d.mu.mem.queue[n].totalBytes()
+			size += s.mu.mem.queue[n].totalBytes()
 		}
 	}
 	if n == 0 {
 		return false
 	}
 
-	minFlushSize := uint64(d.opts.MemTableSize) / 2
+	minFlushSize := uint64(s.memTableSize) / 2
 	return size >= minFlushSize
 }
 
-func (d *DB) flush(needReport bool) {
-	pprof.Do(context.Background(), flushLabels, func(context.Context) {
-		defer func() {
-			if r := recover(); r != any(nil) {
-				d.opts.Logger.Errorf("bitalosdb: flush panic err:%v stack:%s", r, string(debug.Stack()))
-			}
-		}()
+func (s *Bitower) maybeScheduleFlush(needReport bool) {
+	if s.mu.compact.flushing || s.db.IsClosed() || len(s.mu.mem.queue) <= 1 {
+		return
+	}
 
-		d.mu.Lock()
-		defer d.mu.Unlock()
+	if !s.passedFlushThreshold() {
+		return
+	}
 
-		if err := d.flush1(needReport); err != nil {
-			d.opts.EventListener.BackgroundError(err)
-		}
-		d.mu.compact.flushing = false
-		d.maybeScheduleFlush(true)
+	s.mu.compact.flushing = true
 
-		d.mu.compact.cond.Broadcast()
+	s.db.memFlushTask.PushTask(&bitask.MemFlushTaskData{
+		Index:      s.index,
+		NeedReport: needReport,
 	})
 }
 
-func (d *DB) flush1(needReport bool) (err error) {
+func (s *Bitower) flush(needReport bool) {
+	pprof.Do(context.Background(), flushLabels, func(context.Context) {
+		defer func() {
+			if r := recover(); r != any(nil) {
+				s.db.opts.Logger.Errorf("[BITOWER %d] flush panic err:%v stack:%s", s.index, r, string(debug.Stack()))
+			}
+		}()
+
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		defer func() {
+			s.mu.compact.flushing = false
+			s.maybeScheduleFlush(true)
+			s.mu.compact.cond.Broadcast()
+		}()
+
+		if err := s.flush1(needReport); err != nil {
+			s.db.opts.EventListener.BackgroundError(err)
+		}
+	})
+}
+
+func (s *Bitower) flush1(needReport bool) (err error) {
 	var n int
-	for ; n < len(d.mu.mem.queue)-1; n++ {
-		if !d.mu.mem.queue[n].readyForFlush() {
+	for ; n < len(s.mu.mem.queue)-1; n++ {
+		if !s.mu.mem.queue[n].readyForFlush() {
 			break
 		}
 	}
@@ -142,43 +143,39 @@ func (d *DB) flush1(needReport bool) (err error) {
 		return nil
 	}
 
-	minUnflushedLogNum := d.mu.mem.queue[n].logNum
-	if !d.opts.DisableWAL {
+	minUnflushedLogNum := s.mu.mem.queue[n].logNum
+	if !s.db.opts.DisableWAL {
 		for i := 0; i < n; i++ {
-			logNum := d.mu.mem.queue[i].logNum
+			logNum := s.mu.mem.queue[i].logNum
 			if logNum >= minUnflushedLogNum {
 				return errFlushInvariant
 			}
 		}
 	}
 
-	if needReport && d.opts.FlushReporter != nil {
-		d.opts.FlushReporter(d.opts.Id)
+	if needReport && s.db.opts.FlushReporter != nil {
+		s.db.opts.FlushReporter(s.db.opts.Id)
 	}
 
-	c := newFlush(d.opts, d.mu.mem.queue[:n], &d.atomic.bytesFlushed)
+	c := newFlush(s.db.opts, s.mu.mem.queue[:n])
 
-	jobID := d.mu.nextJobID
-	d.mu.nextJobID++
-
-	if err = d.runCompaction(jobID, c, n); err == nil {
-		var me metaEdit
-		me.MinUnflushedLogNum = minUnflushedLogNum
-		err = d.mu.meta.apply(&me)
+	err = s.runCompaction(c, n)
+	if err == nil {
+		sme := &bitowerMetaEditor{MinUnflushedLogNum: minUnflushedLogNum}
+		err = s.metaApply(sme)
 	}
-
-	atomic.StoreUint64(&d.atomic.bytesFlushed, 0)
 
 	var flushed flushableList
 	if err == nil {
-		flushed = d.mu.mem.queue[:n]
-		d.mu.mem.queue = d.mu.mem.queue[n:]
-		d.updateReadStateLocked()
+		flushed = s.mu.mem.queue[:n]
+		s.mu.mem.queue = s.mu.mem.queue[n:]
+		s.updateReadState()
 	}
-	d.deleteObsoleteFiles(jobID, false)
 
-	d.mu.Unlock()
-	defer d.mu.Lock()
+	s.doDeleteObsoleteFiles()
+
+	s.mu.Unlock()
+	defer s.mu.Lock()
 
 	for i := range flushed {
 		flushed[i].readerUnref()
@@ -188,72 +185,98 @@ func (d *DB) flush1(needReport bool) (err error) {
 	return err
 }
 
-func (d *DB) runCompaction(jobID int, c *compaction, memNum int) (retErr error) {
-	d.mu.Unlock()
-	defer d.mu.Lock()
+func (s *Bitower) runCompaction(c *compaction, memNum int) (err error) {
+	s.mu.Unlock()
+	defer s.mu.Lock()
 
-	iiter, err := c.newInputIter()
-	if err != nil {
-		return err
-	}
+	d := s.db
 
 	iter := &compactionIter{
 		cmp:  c.cmp,
-		iter: iiter,
+		iter: c.newInputIter(),
 	}
 
 	defer func() {
-		if iter != nil {
-			retErr = utils.FirstError(retErr, iter.Close())
-		}
-		for _, closer := range c.closers {
-			retErr = utils.FirstError(retErr, closer.Close())
-		}
+		err = utils.FirstError(err, iter.Close())
 	}()
 
-	d.dbState.SetHighPriority(true)
-	d.dbState.LockDbWrite()
+	d.dbState.SetBitowerHighPriority(s.index, true)
+	d.dbState.LockBitowerWrite(s.index)
 	defer func() {
-		d.dbState.SetHighPriority(false)
-		d.dbState.UnlockDbWrite()
+		d.dbState.SetBitowerHighPriority(s.index, false)
+		d.dbState.UnlockBitowerWrite(s.index)
 	}()
-
-	d.dbState.LockMemFlushing()
-	defer d.dbState.UnLockMemFlushing()
 
 	d.opts.EventListener.FlushBegin(FlushInfo{
-		JobID: jobID,
+		Index: s.index,
 		Input: memNum,
 	})
 	startTime := d.timeNow()
 	defer func() {
 		info := FlushInfo{
-			JobID:      jobID,
-			Input:      memNum,
-			Iterated:   c.bytesIterated,
-			Written:    c.bytesWritten,
-			keyWritten: c.keyWritten,
-			Duration:   d.timeNow().Sub(startTime),
-			Done:       true,
-			Err:        retErr,
+			Index:               s.index,
+			Input:               memNum,
+			Iterated:            c.bytesIterated,
+			Written:             c.bytesWritten,
+			keyWritten:          c.keyWritten,
+			keyPrefixDeleteKind: c.keyPrefixDeleteKind,
+			prefixDeleteNum:     c.prefixDeleteNum,
+			Duration:            d.timeNow().Sub(startTime),
+			Done:                true,
+			Err:                 err,
 		}
-		d.bf.SetFlushMemTime(info.Duration.Milliseconds())
+		d.flushMemTime.Store(info.Duration.Milliseconds())
 		d.opts.EventListener.FlushEnd(info)
 	}()
 
-	bw := d.bf.GetWriter()
-	if err = bw.Start(memNum); err != nil {
-		return err
-	}
-	for key, val := iter.First(); key != nil; key, val = iter.Next() {
-		atomic.StoreUint64(c.atomicBytesIterated, c.bytesIterated)
+	var lastPrefixDelete uint64
+	var writer *flushBitowerWriter
 
-		if key.Kind() == InternalKeyKindSet && d.optspool.BaseOptions.KvCheckExpire(key.UserKey, val) {
-			key.SetKind(InternalKeyKindDelete)
-			val = nil
+	checkKeyPrefixDelete := func(ik *InternalKey) bool {
+		if lastPrefixDelete == 0 {
+			return false
 		}
 
-		if err = bw.Set(*key, val); err != nil {
+		keyPrefixDelete := d.optspool.BaseOptions.KeyPrefixDeleteFunc(ik.UserKey)
+		if lastPrefixDelete == keyPrefixDelete {
+			return true
+		} else {
+			lastPrefixDelete = 0
+			return false
+		}
+	}
+
+	writer, err = s.newFlushWriter()
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		err = writer.Finish()
+	}()
+
+	for key, val := iter.First(); key != nil; key, val = iter.Next() {
+		switch key.Kind() {
+		case InternalKeyKindSet:
+			if checkKeyPrefixDelete(key) {
+				c.prefixDeleteNum++
+				continue
+			}
+
+			if d.optspool.BaseOptions.KvCheckExpire(key.UserKey, val) {
+				key.SetKind(InternalKeyKindDelete)
+				val = nil
+			}
+		case InternalKeyKindDelete:
+			if checkKeyPrefixDelete(key) {
+				continue
+			}
+		case InternalKeyKindPrefixDelete:
+			lastPrefixDelete = d.optspool.BaseOptions.KeyPrefixDeleteFunc(key.UserKey)
+			c.keyPrefixDeleteKind++
+		}
+
+		if err = writer.Set(*key, val); err != nil {
 			return err
 		}
 
@@ -261,119 +284,57 @@ func (d *DB) runCompaction(jobID int, c *compaction, memNum int) (retErr error) 
 		c.keyWritten++
 	}
 
-	return bw.Finish()
+	return nil
 }
 
-func (d *DB) scanObsoleteFiles(list []string) {
-	if d.mu.compact.flushing {
-		d.opts.Logger.Error("panic: cannot scan obsolete files concurrently with compaction/flushing")
-		return
-	}
-
-	minUnflushedLogNum := d.mu.meta.minUnflushedLogNum
-
+func (s *Bitower) doDeleteObsoleteFiles() {
 	var obsoleteLogs []fileInfo
-
-	for _, filename := range list {
-		ft, fn, ok := base.ParseFilename(d.opts.FS, filename)
-		if !ok {
-			continue
-		}
-		switch ft {
-		case fileTypeLog:
-			if fn < minUnflushedLogNum {
-				fi := fileInfo{fileNum: fn}
-				if stat, err := d.opts.FS.Stat(filename); err == nil {
-					fi.fileSize = uint64(stat.Size())
-				}
-				obsoleteLogs = append(obsoleteLogs, fi)
-			}
-		}
-	}
-
-	d.mu.log.queue = merge(d.mu.log.queue, obsoleteLogs)
-}
-
-func (d *DB) disableFileDeletions() {
-	d.mu.cleaner.disabled++
-	for d.mu.cleaner.cleaning {
-		d.mu.cleaner.cond.Wait()
-	}
-	d.mu.cleaner.cond.Broadcast()
-}
-
-func (d *DB) enableFileDeletions() {
-	if d.mu.cleaner.disabled <= 0 || d.mu.cleaner.cleaning {
-		d.opts.Logger.Error("panic: file deletion disablement invariant violated")
-		return
-	}
-	d.mu.cleaner.disabled--
-	if d.mu.cleaner.disabled > 0 {
-		return
-	}
-	jobID := d.mu.nextJobID
-	d.mu.nextJobID++
-	d.deleteObsoleteFiles(jobID, true)
-}
-
-func (d *DB) acquireCleaningTurn(waitForOngoing bool) bool {
-	for d.mu.cleaner.cleaning && d.mu.cleaner.disabled == 0 && waitForOngoing {
-		d.mu.cleaner.cond.Wait()
-	}
-	if d.mu.cleaner.cleaning {
-		return false
-	}
-	if d.mu.cleaner.disabled > 0 {
-		return false
-	}
-	d.mu.cleaner.cleaning = true
-	return true
-}
-
-func (d *DB) releaseCleaningTurn() {
-	d.mu.cleaner.cleaning = false
-	d.mu.cleaner.cond.Broadcast()
-}
-
-func (d *DB) deleteObsoleteFiles(jobID int, waitForOngoing bool) {
-	if !d.acquireCleaningTurn(waitForOngoing) {
-		return
-	}
-	d.doDeleteObsoleteFiles(jobID)
-	d.releaseCleaningTurn()
-}
-
-type fileInfo struct {
-	fileNum  FileNum
-	fileSize uint64
-}
-
-func (d *DB) doDeleteObsoleteFiles(jobID int) {
-	var obsoleteLogs []fileInfo
-	for i := range d.mu.log.queue {
-		if d.mu.log.queue[i].fileNum >= d.mu.meta.minUnflushedLogNum {
-			obsoleteLogs = d.mu.log.queue[:i]
-			d.mu.log.queue = d.mu.log.queue[i:]
+	for i := range s.mu.log.queue {
+		if s.mu.log.queue[i].fileNum >= s.getMinUnflushedLogNum() {
+			obsoleteLogs = s.mu.log.queue[:i]
+			s.mu.log.queue = s.mu.log.queue[i:]
 			break
 		}
 	}
 
-	d.mu.Unlock()
-	defer d.mu.Lock()
+	s.mu.Unlock()
+	defer s.mu.Lock()
 
 	for _, f := range obsoleteLogs {
-		if d.logRecycler.add(f) {
+		if s.logRecycler.add(f) {
 			continue
 		}
 
-		path := base.MakeFilepath(d.opts.FS, d.walDirname, fileTypeLog, f.fileNum)
-		d.optspool.BaseOptions.DeleteFilePacer.AddFile(path)
-		d.opts.EventListener.WALDeleted(WALDeleteInfo{
-			JobID:   jobID,
-			Path:    path,
+		filename := s.makeWalFilename(f.fileNum)
+		s.db.optspool.BaseOptions.DeleteFilePacer.AddFile(filename)
+		s.db.opts.EventListener.WALDeleted(WALDeleteInfo{
+			Index:   s.index,
+			Path:    filename,
 			FileNum: f.fileNum,
 		})
 	}
+}
+
+func (s *Bitower) scanObsoleteFiles(list []string) {
+	if s.mu.compact.flushing {
+		return
+	}
+
+	var obsoleteLogs []fileInfo
+
+	minUnflushedLogNum := s.getMinUnflushedLogNum()
+	for _, filename := range list {
+		ft, fn, ok := base.ParseFilename(s.db.opts.FS, filename)
+		if ok && ft == fileTypeLog && fn < minUnflushedLogNum {
+			fi := fileInfo{fileNum: fn}
+			if stat, err := s.db.opts.FS.Stat(filename); err == nil {
+				fi.fileSize = uint64(stat.Size())
+			}
+			obsoleteLogs = append(obsoleteLogs, fi)
+		}
+	}
+
+	s.mu.log.queue = merge(s.mu.log.queue, obsoleteLogs)
 }
 
 func merge(a, b []fileInfo) []fileInfo {
