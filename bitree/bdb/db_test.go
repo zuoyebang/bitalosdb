@@ -35,8 +35,8 @@ import (
 	"unsafe"
 
 	"github.com/zuoyebang/bitalosdb/bitree/bdb"
-	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 )
 
 var statsFlag = flag.Bool("stats", false, "show performance stats")
@@ -380,7 +380,7 @@ func TestDB_Open_InitialMmapSize(t *testing.T) {
 
 	testWriteSize := 1 << 27
 
-	opts := base.DefaultBdbOptions
+	opts := options.DefaultBdbOptions
 	opts.InitialMmapSize = 1 << 30
 
 	db, err := bdb.Open(path, opts)
@@ -450,7 +450,7 @@ func TestDB_Open_ReadOnly(t *testing.T) {
 	}
 
 	f := db.f
-	o := &base.BdbOptions{ReadOnly: true}
+	o := &options.BdbOptions{ReadOnly: true}
 	readOnlyDB, err := bdb.Open(f, o)
 	if err != nil {
 		panic(err)
@@ -482,7 +482,7 @@ func TestDB_Open_ReadOnly(t *testing.T) {
 func TestOpen_BigPage(t *testing.T) {
 	pz := os.Getpagesize()
 
-	opts := base.DefaultBdbOptions
+	opts := options.DefaultBdbOptions
 	opts.PageSize = pz * 2
 	db1 := MustOpenWithOption(opts)
 	defer db1.MustClose()
@@ -497,7 +497,7 @@ func TestOpen_BigPage(t *testing.T) {
 }
 
 func TestOpen_RecoverFreeList(t *testing.T) {
-	opts := base.DefaultBdbOptions
+	opts := options.DefaultBdbOptions
 	opts.NoFreelistSync = true
 	db := MustOpenWithOption(opts)
 	defer db.MustClose()
@@ -550,7 +550,7 @@ func TestOpen_RecoverFreeList(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	db.o = base.DefaultBdbOptions
+	db.o = options.DefaultBdbOptions
 	db.MustReopen()
 	freepages--
 	if fp := db.Stats().FreePageN; fp < freepages {
@@ -588,7 +588,7 @@ func TestDB_BeginRW(t *testing.T) {
 }
 
 func TestDB_Concurrent_WriteTo(t *testing.T) {
-	o := &base.BdbOptions{NoFreelistSync: false}
+	o := &options.BdbOptions{NoFreelistSync: false}
 	db := MustOpenWithOption(o)
 	defer db.MustClose()
 
@@ -1594,17 +1594,17 @@ func validateBatchBench(b *testing.B, db *DB) {
 type DB struct {
 	*bdb.DB
 	f string
-	o *base.BdbOptions
+	o *options.BdbOptions
 }
 
 func MustOpenDB() *DB {
 	return MustOpenWithOption(nil)
 }
 
-func MustOpenWithOption(o *base.BdbOptions) *DB {
+func MustOpenWithOption(o *options.BdbOptions) *DB {
 	f := tempfile()
 	if o == nil {
-		o = base.DefaultBdbOptions
+		o = options.DefaultBdbOptions
 	}
 
 	freelistType := consts.BdbFreelistArrayType
@@ -1708,7 +1708,7 @@ func (db *DB) CopyTempFile() {
 }
 
 func tempfile() string {
-	f, err := ioutil.TempFile("", "bdb-")
+	f, err := os.CreateTemp("", "bdb-")
 	if err != nil {
 		panic(err)
 	}

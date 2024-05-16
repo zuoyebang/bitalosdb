@@ -23,7 +23,7 @@ const (
 	maxPoolBufSize = 36 << 10
 )
 
-var DefaultBytePools = NewBytePools()
+var ReaderBytePools = NewBytePools()
 
 type BytePools struct {
 	pools [poolsNum]sync.Pool

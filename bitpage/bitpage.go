@@ -25,6 +25,7 @@ import (
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/cache/lrucache"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 	"github.com/zuoyebang/bitalosdb/internal/statemachine"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 	"github.com/zuoyebang/bitalosdb/internal/vfs"
@@ -45,7 +46,7 @@ var (
 
 type Bitpage struct {
 	meta          *bitpagemeta
-	opts          *base.BitpageOptions
+	opts          *options.BitpageOptions
 	pages         sync.Map
 	pageWriters   sync.Map
 	splittedPages sync.Map
@@ -76,7 +77,7 @@ type fileInfo struct {
 	path string
 }
 
-func Open(dirname string, opts *base.BitpageOptions) (b *Bitpage, err error) {
+func Open(dirname string, opts *options.BitpageOptions) (b *Bitpage, err error) {
 	b = &Bitpage{
 		dirname:       dirname,
 		opts:          opts,
@@ -98,13 +99,14 @@ func Open(dirname string, opts *base.BitpageOptions) (b *Bitpage, err error) {
 	}
 
 	if b.opts.UseBlockCompress {
-		cacheOpts := &base.CacheOptions{
-			Size:     consts.BitpageBlockCacheSize,
-			Shards:   consts.BitpageLruCacheShards,
+		cacheOpts := &options.CacheOptions{
+			Size:     b.opts.BitpageBlockCacheSize,
+			Shards:   consts.BitpageBlockCacheShards,
 			HashSize: consts.BitpageBlockCacheHashSize,
 			Logger:   b.opts.Logger,
 		}
 		b.cache = lrucache.NewLrucache(cacheOpts)
+		b.opts.Logger.Infof("bitpage new block cache ok index:%d size:%d", opts.Index, cacheOpts.Size)
 	}
 
 	defer b.freeStArenaBuf()
@@ -247,15 +249,6 @@ func (b *Bitpage) GetCacheMetrics() string {
 	return b.cache.MetricsInfo()
 }
 
-func (b *Bitpage) GetPageCount() int {
-	count := 0
-	b.pages.Range(func(pn, p interface{}) bool {
-		count++
-		return true
-	})
-	return count
-}
-
 func (b *Bitpage) GetPageDelPercent(pn PageNum) float64 {
 	p := b.GetPage(pn)
 	if p == nil {
@@ -374,17 +367,26 @@ func (b *Bitpage) Close() (err error) {
 	return nil
 }
 
-func (b *Bitpage) GetNeedFlushPageNums() []PageNum {
+func (b *Bitpage) GetNeedFlushPageNums(isForce bool) []PageNum {
 	var pns []PageNum
 	b.pages.Range(func(pn, p interface{}) bool {
 		if pg, ok := p.(*page); ok {
-			if pg.maybeScheduleFlush(b.opts.BitpageFlushSize) {
+			if pg.maybeScheduleFlush(b.opts.BitpageFlushSize, isForce) {
 				pns = append(pns, pn.(PageNum))
 			}
 		}
 		return true
 	})
 	return pns
+}
+
+func (b *Bitpage) GetPageCount() int {
+	count := 0
+	b.pages.Range(func(pn, p interface{}) bool {
+		count++
+		return true
+	})
+	return count
 }
 
 func (b *Bitpage) PageFlush(pn PageNum, sentinel []byte, logTag string) error {
@@ -404,6 +406,16 @@ func (b *Bitpage) PageFlush(pn PageNum, sentinel []byte, logTag string) error {
 	}
 
 	return p.flush(sentinel, logTag)
+}
+
+func (b *Bitpage) ManualPageFlush(pn PageNum) error {
+	p := b.GetPage(pn)
+	if p == nil {
+		return ErrPageNotFound
+	}
+
+	p.setFlushState(pageFlushStateSendTask)
+	return b.PageFlush(pn, nil, "")
 }
 
 func (b *Bitpage) PageSplitStart(pn PageNum, log string) (sps []*SplitPageInfo, err error) {

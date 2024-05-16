@@ -23,7 +23,7 @@ import (
 	"testing"
 
 	"github.com/zuoyebang/bitalosdb/bitree/bdb"
-	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 )
 
 func TestTx_Check_ReadOnly(t *testing.T) {
@@ -45,7 +45,7 @@ func TestTx_Check_ReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	opts := base.DefaultBdbOptions
+	opts := options.DefaultBdbOptions
 	opts.ReadOnly = true
 	readOnlyDB, err := bdb.Open(db.f, opts)
 	if err != nil {
@@ -684,7 +684,7 @@ func TestTx_Rollback(t *testing.T) {
 }
 
 func TestTx_releaseRange(t *testing.T) {
-	opts := base.DefaultBdbOptions
+	opts := options.DefaultBdbOptions
 	opts.InitialMmapSize = os.Getpagesize() * 100
 	db := MustOpenWithOption(opts)
 	defer db.MustClose()

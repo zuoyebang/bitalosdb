@@ -180,9 +180,9 @@ func (s *skl) Size() uint32 { return s.tbl.Size() }
 func (s *skl) Get(key []byte, khash uint32) ([]byte, bool, internalKeyKind) {
 	var nd *node
 	var kind internalKeyKind
-	var beFound bool = false
+	var beFound bool
 
-	if s.useMapIndex && s.cache.index != nil && !s.st.bp.dbState.IsMemFlushing() {
+	if s.useMapIndex && s.cache.index != nil {
 		s.cache.RLock()
 		if ndOffset, ok := s.cache.index[khash]; ok {
 			nd = (*node)(s.tbl.getPointer(ndOffset))
@@ -206,7 +206,7 @@ func (s *skl) Get(key []byte, khash uint32) ([]byte, bool, internalKeyKind) {
 		}
 	}
 
-	if s.useMapIndex && !beFound && khash > 0 && !s.st.bp.dbState.IsMemFlushing() {
+	if s.useMapIndex && !beFound && khash > 0 {
 		s.cache.Lock()
 		s.cache.index[khash] = s.tbl.getPointerOffset(unsafe.Pointer(nd))
 		s.cache.Unlock()

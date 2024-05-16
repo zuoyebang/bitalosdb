@@ -15,12 +15,12 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 	"golang.org/x/exp/rand"
 )
 
 func testNewShards() *LruCache {
-	opts := &base.CacheOptions{
+	opts := &options.CacheOptions{
 		Size:     100,
 		Shards:   1,
 		HashSize: 1024,
@@ -34,7 +34,7 @@ func TestCache(t *testing.T) {
 	f, err := os.Open("testdata/cache")
 	require.NoError(t, err)
 
-	opts := &base.CacheOptions{
+	opts := &options.CacheOptions{
 		Size:     200,
 		Shards:   1,
 		HashSize: 1024,
@@ -143,7 +143,7 @@ func TestMultipleDBs(t *testing.T) {
 }
 
 func TestZeroSize(t *testing.T) {
-	opts := &base.CacheOptions{
+	opts := &options.CacheOptions{
 		Size:     0,
 		Shards:   1,
 		HashSize: 1024,
@@ -155,7 +155,7 @@ func TestZeroSize(t *testing.T) {
 }
 
 func TestReserve(t *testing.T) {
-	opts := &base.CacheOptions{
+	opts := &options.CacheOptions{
 		Size:     4,
 		Shards:   2,
 		HashSize: 1024,
@@ -203,7 +203,7 @@ func TestReserveDoubleRelease(t *testing.T) {
 }
 
 func TestCacheStressSetExisting(t *testing.T) {
-	opts := &base.CacheOptions{
+	opts := &options.CacheOptions{
 		Size:     1,
 		Shards:   1,
 		HashSize: 1024,
@@ -228,7 +228,7 @@ func TestCacheStressSetExisting(t *testing.T) {
 func TestCacheSetGet(t *testing.T) {
 	const size = 100000
 
-	opts := &base.CacheOptions{
+	opts := &options.CacheOptions{
 		Size:     size,
 		Shards:   1,
 		HashSize: 1024,
@@ -250,10 +250,29 @@ func TestCacheSetGet(t *testing.T) {
 	}
 }
 
+func TestCacheSetNil(t *testing.T) {
+	const size = 100000
+
+	opts := &options.CacheOptions{
+		Size:     size,
+		Shards:   1,
+		HashSize: 1024,
+	}
+
+	cache := NewLrucache(opts)
+	defer cache.Unref()
+
+	k := []byte("test1")
+
+	require.NoError(t, cache.Set(k, nil, 0))
+	_, _, found := cache.Get(k, 0)
+	require.Equal(t, false, found)
+}
+
 func BenchmarkCacheGet(b *testing.B) {
 	const size = 100000
 
-	opts := &base.CacheOptions{
+	opts := &options.CacheOptions{
 		Size:     size,
 		Shards:   1,
 		HashSize: 1024,

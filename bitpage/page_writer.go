@@ -32,5 +32,5 @@ func (w *PageWriter) FlushFinish() error {
 }
 
 func (w *PageWriter) MaybePageFlush(size uint64) bool {
-	return w.p.maybeScheduleFlush(size)
+	return w.p.maybeScheduleFlush(size, false)
 }

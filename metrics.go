@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package bitforest
+package bitalosdb
 
 import (
 	"bytes"
 	"encoding/json"
 )
 
-type Stats struct {
+type MetricsInfo struct {
 	FlushMemTime       int64 `json:"-"`
 	BithashFileTotal   int   `json:"bithash_file_total"`
 	BithashKeyTotal    int   `json:"bithash_key_total"`
 	BithashDelKeyTotal int   `json:"bithash_del_key_total"`
 }
 
-func (s Stats) String() string {
+func (s MetricsInfo) String() string {
 	str, err := json.Marshal(s)
 	if err != nil {
 		return ""
@@ -35,10 +35,19 @@ func (s Stats) String() string {
 	}
 }
 
-func (bf *Bitforest) Stats() Stats {
-	var stat Stats
-	for _, tree := range bf.trees {
-		bs := tree.BithashStats()
+func (d *DB) statsDiskSize() int64 {
+	var size int64
+	for _, bitower := range d.bitowers {
+		ps := bitower.btree.BitpageStats()
+		size += ps.Size
+	}
+	return size
+}
+
+func (d *DB) MetricsInfo() MetricsInfo {
+	var stat MetricsInfo
+	for i := range d.bitowers {
+		bs := d.bitowers[i].btree.BithashStats()
 		if bs != nil {
 			fileTotal := int(bs.FileTotal.Load())
 			stat.BithashFileTotal += fileTotal
@@ -47,38 +56,36 @@ func (bf *Bitforest) Stats() Stats {
 		}
 	}
 
-	stat.FlushMemTime = bf.GetFlushMemTime()
+	stat.FlushMemTime = d.flushMemTime.Load()
 	return stat
 }
 
-func (bf *Bitforest) StatsDiskSize() int64 {
-	var size int64
-	for _, tree := range bf.trees {
-		ps := tree.BitpageStats()
-		size += ps.Size
+func (d *DB) CacheInfo() string {
+	if d.cache == nil {
+		return ""
 	}
-
-	return size
+	return d.cache.MetricsInfo()
 }
 
-func (bf *Bitforest) DebugInfo(dataType string) string {
+func (d *DB) DebugInfo() string {
+	dataType := d.opts.DataType
 	if dataType == "" {
 		dataType = "base"
 	}
 
 	dinfo := new(bytes.Buffer)
-	for _, tree := range bf.trees {
-		bpInfo := tree.BitreeDebugInfo(dataType)
+	for _, bitower := range d.bitowers {
+		bpInfo := bitower.btree.BitreeDebugInfo(dataType)
 		if bpInfo != "" {
 			dinfo.WriteString(bpInfo)
 		}
 
-		btInfo := tree.BitableDebugInfo(dataType)
+		btInfo := bitower.btree.BitableDebugInfo(dataType)
 		if btInfo != "" {
 			dinfo.WriteString(btInfo)
 		}
 
-		bhInfo := tree.BithashDebugInfo(dataType)
+		bhInfo := bitower.btree.BithashDebugInfo(dataType)
 		if bhInfo != "" {
 			dinfo.WriteString(bhInfo)
 		}

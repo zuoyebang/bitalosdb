@@ -51,14 +51,14 @@ func (e *testCommitEnv) env() commitEnv {
 	}
 }
 
-func (e *testCommitEnv) apply(b *Batch, mem *memTable) error {
+func (e *testCommitEnv) apply(b *BatchBitower, mem *memTable) error {
 	e.applyBuf.Lock()
 	e.applyBuf.buf = append(e.applyBuf.buf, b.SeqNum())
 	e.applyBuf.Unlock()
 	return nil
 }
 
-func (e *testCommitEnv) write(b *Batch, _ *sync.WaitGroup, _ *error) (*memTable, error) {
+func (e *testCommitEnv) write(b *BatchBitower, _ *sync.WaitGroup, _ *error) (*memTable, error) {
 	n := int64(len(b.data))
 	atomic.AddInt64(&e.writePos, n)
 	atomic.AddUint64(&e.writeCount, 1)
@@ -67,7 +67,7 @@ func (e *testCommitEnv) write(b *Batch, _ *sync.WaitGroup, _ *error) (*memTable,
 
 func TestCommitQueue(t *testing.T) {
 	var q commitQueue
-	var batches [16]Batch
+	var batches [16]BatchBitower
 	for i := range batches {
 		q.enqueue(&batches[i])
 	}
@@ -103,7 +103,7 @@ func TestCommitPipeline(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func(i int) {
 			defer wg.Done()
-			var b Batch
+			var b BatchBitower
 			_ = b.Set([]byte(fmt.Sprint(i)), nil, nil)
 			_ = p.Commit(&b, false)
 		}(i)
@@ -122,42 +122,6 @@ func TestCommitPipeline(t *testing.T) {
 	}
 	if s := atomic.LoadUint64(&e.visibleSeqNum); uint64(n) != s {
 		t.Fatalf("expected %d, but found %d", n, s)
-	}
-}
-
-func TestCommitPipelineAllocateSeqNum(t *testing.T) {
-	var e testCommitEnv
-	p := newCommitPipeline(e.env())
-
-	const n = 10
-	var wg sync.WaitGroup
-	wg.Add(n)
-	var prepareCount uint64
-	var applyCount uint64
-	for i := 1; i <= n; i++ {
-		go func(i int) {
-			defer wg.Done()
-			p.AllocateSeqNum(i, func() {
-				atomic.AddUint64(&prepareCount, uint64(1))
-			}, func(seqNum uint64) {
-				atomic.AddUint64(&applyCount, uint64(1))
-			})
-		}(i)
-	}
-	wg.Wait()
-
-	if s := atomic.LoadUint64(&prepareCount); n != s {
-		t.Fatalf("expected %d prepares, but found %d", n, s)
-	}
-	if s := atomic.LoadUint64(&applyCount); n != s {
-		t.Fatalf("expected %d applies, but found %d", n, s)
-	}
-	const total = 1 + 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10
-	if s := atomic.LoadUint64(&e.logSeqNum); total != s {
-		t.Fatalf("expected %d, but found %d", total, s)
-	}
-	if s := atomic.LoadUint64(&e.visibleSeqNum); total != s {
-		t.Fatalf("expected %d, but found %d", total, s)
 	}
 }
 
@@ -186,14 +150,15 @@ func TestCommitPipelineWALClose(t *testing.T) {
 	testEnv := commitEnv{
 		logSeqNum:     new(uint64),
 		visibleSeqNum: new(uint64),
-		apply: func(b *Batch, mem *memTable) error {
+		apply: func(b *BatchBitower, mem *memTable) error {
 			walDone.Done()
 			return nil
 		},
-		write: func(b *Batch, syncWG *sync.WaitGroup, syncErr *error) (*memTable, error) {
+		write: func(b *BatchBitower, syncWG *sync.WaitGroup, syncErr *error) (*memTable, error) {
 			_, err := wal.SyncRecord(b.data, syncWG, syncErr)
 			return nil, err
 		},
+		useQueue: true,
 	}
 	p := newCommitPipeline(testEnv)
 
@@ -201,12 +166,12 @@ func TestCommitPipelineWALClose(t *testing.T) {
 	walDone.Add(cap(errCh))
 	for i := 0; i < cap(errCh); i++ {
 		go func(i int) {
-			b := &Batch{}
+			b := &BatchBitower{}
 			if err := b.LogData([]byte("foo"), nil); err != nil {
 				errCh <- err
 				return
 			}
-			errCh <- p.Commit(b, true /* sync */)
+			errCh <- p.Commit(b, true)
 		}(i)
 	}
 
@@ -229,7 +194,7 @@ func BenchmarkCommitPipeline(b *testing.B) {
 			nullCommitEnv := commitEnv{
 				logSeqNum:     new(uint64),
 				visibleSeqNum: new(uint64),
-				apply: func(b *Batch, mem *memTable) error {
+				apply: func(b *BatchBitower, mem *memTable) error {
 					err := mem.apply(b, b.SeqNum())
 					if err != nil {
 						return err
@@ -237,7 +202,7 @@ func BenchmarkCommitPipeline(b *testing.B) {
 					mem.writerUnref()
 					return nil
 				},
-				write: func(b *Batch, syncWG *sync.WaitGroup, syncErr *error) (*memTable, error) {
+				write: func(b *BatchBitower, syncWG *sync.WaitGroup, syncErr *error) (*memTable, error) {
 					for {
 						err := mem.prepare(b, false)
 						if err == arenaskl.ErrArenaFull {
@@ -265,7 +230,7 @@ func BenchmarkCommitPipeline(b *testing.B) {
 				buf := make([]byte, keySize)
 
 				for pb.Next() {
-					batch := newBatch(nil)
+					batch := newBatchBitower(nil)
 					binary.BigEndian.PutUint64(buf, rng.Uint64())
 					batch.Set(buf, buf, nil)
 					if err := p.Commit(batch, true /* sync */); err != nil {

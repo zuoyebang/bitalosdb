@@ -18,13 +18,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/zuoyebang/bitalosdb/internal/consts"
 )
 
 type DbStateMachine struct {
-	MemFlushing  atomic.Bool
-	HighPriority atomic.Bool
-	TaskLock     sync.Mutex // compact-bithash｜checkpoint
-	DbWrite      sync.Mutex // mem-flush｜bitpage-flush｜compact-bitable｜checkpoint
+	TaskLock            sync.Mutex // compact-bithash｜checkpoint
+	BitowerHighPriority [consts.DefaultBitowerNum]atomic.Bool
+	BitowerWrite        [consts.DefaultBitowerNum]sync.Mutex // mem-flush｜bitpage-flush/split ｜compact-bitable｜checkpoint
 
 	bitpage struct {
 		flushCount atomic.Uint64
@@ -37,11 +38,23 @@ func NewDbStateMachine() *DbStateMachine {
 }
 
 func (s *DbStateMachine) LockDbWrite() {
-	s.DbWrite.Lock()
+	for i := range s.BitowerWrite {
+		s.BitowerWrite[i].Lock()
+	}
 }
 
 func (s *DbStateMachine) UnlockDbWrite() {
-	s.DbWrite.Unlock()
+	for i := range s.BitowerWrite {
+		s.BitowerWrite[i].Unlock()
+	}
+}
+
+func (s *DbStateMachine) LockBitowerWrite(i int) {
+	s.BitowerWrite[i].Lock()
+}
+
+func (s *DbStateMachine) UnlockBitowerWrite(i int) {
+	s.BitowerWrite[i].Unlock()
 }
 
 func (s *DbStateMachine) LockTask() {
@@ -50,18 +63,6 @@ func (s *DbStateMachine) LockTask() {
 
 func (s *DbStateMachine) UnlockTask() {
 	s.TaskLock.Unlock()
-}
-
-func (s *DbStateMachine) LockMemFlushing() {
-	s.MemFlushing.Store(true)
-}
-
-func (s *DbStateMachine) UnLockMemFlushing() {
-	s.MemFlushing.Store(false)
-}
-
-func (s *DbStateMachine) IsMemFlushing() bool {
-	return s.MemFlushing.Load()
 }
 
 func (s *DbStateMachine) AddBitpageFlushCount() {
@@ -80,12 +81,18 @@ func (s *DbStateMachine) GetBitpageSplitCount() uint64 {
 	return s.bitpage.splitCount.Load()
 }
 
-func (s *DbStateMachine) SetHighPriority(v bool) {
-	s.HighPriority.Store(v)
+func (s *DbStateMachine) SetDbHighPriority(v bool) {
+	for i := range s.BitowerHighPriority {
+		s.BitowerHighPriority[i].Store(v)
+	}
 }
 
-func (s *DbStateMachine) WaitHighPriority() {
-	for s.HighPriority.Load() {
+func (s *DbStateMachine) SetBitowerHighPriority(i int, v bool) {
+	s.BitowerHighPriority[i].Store(v)
+}
+
+func (s *DbStateMachine) WaitBitowerHighPriority(i int) {
+	for s.BitowerHighPriority[i].Load() {
 		time.Sleep(1 * time.Second)
 	}
 }

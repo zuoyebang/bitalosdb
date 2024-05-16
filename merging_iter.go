@@ -34,7 +34,6 @@ type mergingIterLevel struct {
 
 type mergingIter struct {
 	logger   Logger
-	split    Split
 	dir      int
 	snapshot uint64
 	levels   []mergingIterLevel
@@ -47,21 +46,17 @@ type mergingIter struct {
 
 var _ base.InternalIterator = (*mergingIter)(nil)
 
-func newMergingIter(
-	logger Logger, cmp Compare, split Split, iters ...internalIterator,
-) *mergingIter {
+func newMergingIter(logger Logger, cmp Compare, iters ...internalIterator) *mergingIter {
 	m := &mergingIter{}
 	levels := make([]mergingIterLevel, len(iters))
 	for i := range levels {
 		levels[i].iter = iters[i]
 	}
-	m.init(&IterOptions{Logger: logger}, cmp, split, levels...)
+	m.init(&IterOptions{Logger: logger}, cmp, levels...)
 	return m
 }
 
-func (m *mergingIter) init(
-	opts *IterOptions, cmp Compare, split Split, levels ...mergingIterLevel,
-) {
+func (m *mergingIter) init(opts *IterOptions, cmp Compare, levels ...mergingIterLevel) {
 	m.err = nil
 	m.logger = opts.GetLogger()
 	if opts != nil {
@@ -71,7 +66,6 @@ func (m *mergingIter) init(
 	m.snapshot = InternalKeySeqNumMax
 	m.levels = levels
 	m.heap.cmp = cmp
-	m.split = split
 	if cap(m.heap.items) < len(levels) {
 		m.heap.items = make([]mergingIterItem, 0, len(levels))
 	} else {

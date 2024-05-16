@@ -48,8 +48,6 @@ func (e *flushableEntry) readerRef() {
 
 func (e *flushableEntry) readerUnref() {
 	switch v := e.readerRefs.Add(-1); {
-	case v < 0:
-		fmt.Printf("panic: flushableEntry readerUnref logNum:%d count:%d\n", e.logNum, v)
 	case v == 0:
 		if e.releaseMemAccounting == nil {
 			fmt.Println("panic: flushableEntry readerUnref reservation already released")
@@ -57,7 +55,20 @@ func (e *flushableEntry) readerUnref() {
 		}
 		e.releaseMemAccounting()
 		e.releaseMemAccounting = nil
+	case v < 0:
+		fmt.Printf("panic: flushableEntry readerUnref logNum:%d count:%d\n", e.logNum, v)
 	}
 }
 
 type flushableList []*flushableEntry
+
+func newFlushableEntry(f flushable, logNum FileNum, logSeqNum uint64) *flushableEntry {
+	entry := &flushableEntry{
+		flushable: f,
+		flushed:   make(chan struct{}),
+		logNum:    logNum,
+		logSeqNum: logSeqNum,
+	}
+	entry.readerRefs.Store(1)
+	return entry
+}

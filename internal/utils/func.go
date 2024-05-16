@@ -15,38 +15,9 @@
 package utils
 
 import (
-	"encoding/binary"
 	"math/bits"
 	"math/rand"
-
-	"github.com/zuoyebang/bitalosdb/internal/hash"
 )
-
-func FuncMakeKey(key []byte) []byte {
-	slotId := uint16(hash.Crc32(key) % 1024)
-	keyLen := 2 + len(key)
-	newKey := make([]byte, keyLen)
-	binary.BigEndian.PutUint16(newKey[0:2], slotId)
-	copy(newKey[2:keyLen], key)
-	return newKey
-}
-
-func FuncMakeKey2(key []byte, slotId uint16, version uint64) []byte {
-	keyLen := 10 + len(key)
-	newKey := make([]byte, keyLen)
-	binary.BigEndian.PutUint16(newKey[0:2], slotId)
-	binary.LittleEndian.PutUint64(newKey[2:10], version)
-	copy(newKey[10:keyLen], key)
-	return newKey
-}
-
-func FuncMakeSameKey(key []byte, slotId uint16) []byte {
-	keyLen := 2 + len(key)
-	newKey := make([]byte, keyLen)
-	binary.BigEndian.PutUint16(newKey[0:2], slotId)
-	copy(newKey[2:keyLen], key)
-	return newKey
-}
 
 func FuncRandBytes(n int) []byte {
 	randStr := "1qaz2wsx3edc4rfv5tgb6yhn7ujm8ik9ol0pabcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"

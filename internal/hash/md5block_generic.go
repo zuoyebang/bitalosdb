@@ -12,30 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package bitalosdb
+//go:build !amd64 && !386 && !arm && !ppc64le && !ppc64 && !s390x && !arm64
 
-import (
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/cache"
-	"github.com/zuoyebang/bitalosdb/internal/cache/lfucache"
-	"github.com/zuoyebang/bitalosdb/internal/cache/lrucache"
-	"github.com/zuoyebang/bitalosdb/internal/consts"
-)
+package md5hash
 
-func NewCache(kind int, opts *base.CacheOptions) (c cache.ICache) {
-	if kind == consts.CacheTypeLfu {
-		c = lfucache.New(opts)
-	} else {
-		c = lrucache.New(opts)
-	}
-	return c
-}
+const haveAsm = false
 
-func (d *DB) GetCache(key []byte) ([]byte, func(), bool) {
-	if d.cache == nil {
-		return nil, nil, false
-	}
-
-	khash := d.cache.GetKeyHash(key)
-	return d.cache.Get(key, khash)
+func block(dig *digest, p []byte) {
+	blockGeneric(dig, p)
 }

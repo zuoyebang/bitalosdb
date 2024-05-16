@@ -20,7 +20,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/hash"
+	"github.com/zuoyebang/bitalosdb/internal/sortedkv"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 )
 
@@ -104,10 +106,9 @@ func TestBitpageCompact_Flush_TableFull(t *testing.T) {
 		os.RemoveAll(dir)
 
 		var endIndex int
-		num := 2
 		stepCount := 15000
 		seqNum := uint64(1)
-		count := (num + 2) * stepCount
+		count := 2 * stepCount
 		kvList := testMakeSortedKV(count, seqNum, 100)
 		seqNum += uint64(count)
 
@@ -259,7 +260,7 @@ func TestBitpageCompact_FlushArrayTableEmpty(t *testing.T) {
 		}
 
 		for i := 0; i < 100; i++ {
-			key := testMakeKey(i)
+			key := makeTestKey(i)
 			_, vexist, vcloser, _ := p.get(key, hash.Crc32(key))
 			require.Equal(t, false, vexist)
 			if vcloser != nil {
@@ -286,6 +287,160 @@ func TestBitpageCompact_FlushArrayTableEmpty(t *testing.T) {
 			require.Equal(t, internalKeyKindSet, kind)
 			vcloser()
 		}
+
+		testCloseBitpage(t, bp)
+	})
+}
+
+func TestBitpageCompact_PrefixDeleteKey(t *testing.T) {
+	testcase(func(index int, params []bool) {
+		dir := testDir
+		defer os.RemoveAll(dir)
+		os.RemoveAll(dir)
+
+		var endIndex int
+		num := 5
+		stepCount := 30
+		seqNum := uint64(1)
+		count := (num + 2) * stepCount
+		kvList := sortedkv.MakeSortedSamePrefixDeleteKVList(0, count, seqNum, 10, testSlotId)
+		seqNum += uint64(count)
+
+		writeData := func(bp *Bitpage, pn PageNum) {
+			wr := bp.GetPageWriter(pn, nil)
+			startIndex := endIndex
+			endIndex = startIndex + stepCount
+			for i := startIndex; i < endIndex; i++ {
+				if i%3 == 0 && kvList[i].Key.Kind() != internalKeyKindPrefixDelete {
+					kvList[i].Key.SetKind(internalKeyKindDelete)
+					kvList[i].Value = []byte{}
+				}
+				require.NoError(t, wr.Set(*kvList[i].Key, kvList[i].Value))
+			}
+			require.NoError(t, wr.FlushFinish())
+		}
+
+		readData := func(pg *page) {
+			for i := 0; i < endIndex; i++ {
+				key := kvList[i].Key.UserKey
+				v, vexist, vcloser, kind := pg.get(key, hash.Crc32(key))
+				pd := pg.bp.opts.KeyPrefixDeleteFunc(kvList[i].Key.UserKey)
+				if sortedkv.IsPrefixDeleteKey(pd) || i%3 == 0 {
+					if vexist {
+						t.Log(pd, i, kvList[i].Key.String())
+					}
+					require.Equal(t, false, vexist)
+				} else {
+					require.Equal(t, kvList[i].Value, v)
+					require.Equal(t, internalKeyKindSet, kind)
+					vcloser()
+				}
+			}
+		}
+
+		bp, err := testOpenBitpage(true)
+		require.NoError(t, err)
+		pn, err1 := bp.NewPage()
+		require.NoError(t, err1)
+		writeData(bp, pn)
+		p := bp.GetPage(pn)
+		require.NoError(t, p.flush(nil, ""))
+		readData(p)
+		testCloseBitpage(t, bp)
+
+		for i := 0; i < num; i++ {
+			bp2, err2 := testOpenBitpage(true)
+			require.NoError(t, err2)
+			writeData(bp2, pn)
+			p2 := bp2.GetPage(pn)
+			require.NoError(t, p2.flush(nil, ""))
+			readData(p2)
+			testCloseBitpage(t, bp2)
+		}
+	})
+}
+
+func TestBitpageCompact_PrefixDeleteKey2(t *testing.T) {
+	testcase(func(index int, params []bool) {
+		dir := testDir
+		defer os.RemoveAll(dir)
+		os.RemoveAll(dir)
+
+		var endIndex int
+		var pdVers []uint64
+		stepCount := 100
+		seqNum := uint64(1)
+		count := 2 * stepCount
+		kvList := sortedkv.MakeSlotSortedKVList2(0, count, seqNum, 10, testSlotId)
+		seqNum += uint64(count)
+
+		isPrefixDelete := func(v uint64) bool {
+			if len(pdVers) == 0 {
+				return false
+			}
+			for i := range pdVers {
+				if pdVers[i] == v {
+					return true
+				}
+			}
+			return false
+		}
+
+		writeData := func(bp *Bitpage, pn PageNum) {
+			wr := bp.GetPageWriter(pn, nil)
+			startIndex := endIndex
+			endIndex = startIndex + stepCount
+			for i := startIndex; i < endIndex; i++ {
+				require.NoError(t, wr.Set(*kvList[i].Key, kvList[i].Value))
+			}
+			require.NoError(t, wr.FlushFinish())
+		}
+
+		writePrefixDeleteKey := func(bp *Bitpage, pn PageNum, versions []uint64) {
+			if len(versions) == 0 {
+				return
+			}
+			wr := bp.GetPageWriter(pn, nil)
+			for _, version := range versions {
+				key := sortedkv.MakeKey2(nil, testSlotId, version)
+				seqNum++
+				ikey := base.MakeInternalKey(key, seqNum, base.InternalKeyKindPrefixDelete)
+				require.NoError(t, wr.Set(ikey, []byte{}))
+			}
+			require.NoError(t, wr.FlushFinish())
+		}
+
+		readData := func(pg *page) {
+			for i := 0; i < endIndex; i++ {
+				key := kvList[i].Key.UserKey
+				v, vexist, vcloser, kind := pg.get(key, hash.Crc32(key))
+				pd := pg.bp.opts.KeyPrefixDeleteFunc(kvList[i].Key.UserKey)
+				if isPrefixDelete(pd) {
+					if vexist {
+						t.Log(pd, i, kvList[i].Key.String())
+					}
+					require.Equal(t, false, vexist)
+				} else {
+					require.Equal(t, kvList[i].Value, v)
+					require.Equal(t, internalKeyKindSet, kind)
+					vcloser()
+				}
+			}
+		}
+
+		bp, err := testOpenBitpage(true)
+		require.NoError(t, err)
+		pn, err1 := bp.NewPage()
+		require.NoError(t, err1)
+		writeData(bp, pn)
+		p := bp.GetPage(pn)
+		require.NoError(t, p.flush(nil, ""))
+		readData(p)
+
+		pdVers = []uint64{101, 103, 105}
+		writePrefixDeleteKey(bp, pn, pdVers)
+		require.NoError(t, p.flush(nil, ""))
+		readData(p)
 
 		testCloseBitpage(t, bp)
 	})

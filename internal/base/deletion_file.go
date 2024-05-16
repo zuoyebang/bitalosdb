@@ -63,7 +63,7 @@ func (d *DeletionFileLimiter) Run(opts *DFLOption) {
 	go func() {
 		defer d.exitWg.Done()
 
-		d.opts.Logger.Info("deletionFileLimiter produce running")
+		d.opts.Logger.Info("[DELETELIMITER] produce running...")
 
 		for {
 			select {
@@ -83,7 +83,7 @@ func (d *DeletionFileLimiter) Run(opts *DFLOption) {
 		defer d.exitWg.Done()
 
 		duration := time.Duration(d.opts.DeleteInterval) * time.Second
-		d.opts.Logger.Infof("deletionFileLimiter consume running interval:%s", duration)
+		d.opts.Logger.Infof("[DELETELIMITER] consume running interval:%s", duration)
 		t := time.NewTimer(duration)
 		defer t.Stop()
 
@@ -137,7 +137,7 @@ func (d *DeletionFileLimiter) Close() {
 		return
 	}
 
-	d.opts.Logger.Infof("deletionFileLimiter closed start fileListLen:%d", d.fileList.l.Len())
+	d.opts.Logger.Infof("[DELETELIMITER] closed start fileListLen:%d", d.fileList.l.Len())
 
 	d.closed.Store(true)
 	close(d.exitCh)
@@ -147,7 +147,7 @@ func (d *DeletionFileLimiter) Close() {
 		d.deleteFile()
 	}
 
-	d.opts.Logger.Info("deletionFileLimiter closed finish")
+	d.opts.Logger.Info("[DELETELIMITER] closed...")
 }
 
 func (d *DeletionFileLimiter) isClosed() bool {
@@ -193,8 +193,8 @@ func (d *DeletionFileLimiter) deleteFile() {
 
 	filename := GetFilePathBase(path)
 	if err := os.Remove(path); err != nil {
-		d.opts.Logger.Errorf("deletionFileLimiter delete fail file:%s err:%s", filename, err.Error())
+		d.opts.Logger.Errorf("[DELETELIMITER] delete fail file:%s err:%s", filename, err.Error())
 	} else {
-		d.opts.Logger.Infof("deletionFileLimiter delete success file:%s", filename)
+		d.opts.Logger.Infof("[DELETELIMITER] delete success file:%s", filename)
 	}
 }

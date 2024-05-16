@@ -214,7 +214,7 @@ func (ai *arrayTableIterator) setBlockIter() bool {
 		_, blockBuf = ai.at.getKV(ai.intIndexPos)
 		if len(blockBuf) > 0 {
 			var compressedBuf []byte
-			compressedBuf, closer = bytepools.DefaultBytePools.GetMaxBytePool()
+			compressedBuf, closer = bytepools.ReaderBytePools.GetMaxBytePool()
 			blockBuf, _ = compressDecode(compressedBuf, blockBuf)
 			if !ai.disableCache {
 				ai.at.blockCache.SetBlock(ai.at.cacheID, uint64(ai.intIndexPos), blockBuf)

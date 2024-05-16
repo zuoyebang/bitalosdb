@@ -15,16 +15,17 @@
 package bitree
 
 import (
+	"bytes"
 	"sync"
 
 	"github.com/zuoyebang/bitalosdb/bitpage"
 	"github.com/zuoyebang/bitalosdb/bitree/bdb"
-	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 )
 
-func (t *Bitree) openBdb(path string, opts *base.BdbOptions) error {
+func (t *Bitree) openBdb(path string, opts *options.BdbOptions) error {
 	db, err := bdb.Open(path, opts)
 	if err != nil {
 		return err
@@ -111,16 +112,53 @@ func (t *Bitree) FindKeyPageNum(key []byte) (bitpage.PageNum, []byte, func()) {
 		return nilPageNum, nil, rtxCloser
 	}
 
-	pn, v := t.findKeyPageNumByCursor(key, bkt.Cursor())
-	return pn, v, rtxCloser
+	pn, sentinel := t.findKeyPageNum(key, bkt.Cursor())
+	return pn, sentinel, rtxCloser
 }
 
-func (t *Bitree) findKeyPageNumByCursor(key []byte, cursor *bdb.Cursor) (bitpage.PageNum, []byte) {
+func (t *Bitree) findKeyPageNum(key []byte, cursor *bdb.Cursor) (bitpage.PageNum, []byte) {
 	sentinel, v := cursor.Seek(key)
 	if v == nil {
 		return nilPageNum, nil
 	}
 	return bitpage.PageNum(utils.BytesToUint32(v)), sentinel
+}
+
+func (t *Bitree) findPrefixDeleteKeyPageNums(
+	key []byte, cursor *bdb.Cursor,
+) (pns []bitpage.PageNum, sentinels [][]byte) {
+	sentinel, v := cursor.Seek(key)
+	if v == nil {
+		return
+	}
+
+	sentinels = append(sentinels, sentinel)
+	pns = append(pns, bitpage.PageNum(utils.BytesToUint32(v)))
+
+	if bytes.Equal(sentinel, consts.BdbMaxKey) {
+		return
+	}
+
+	keyPrefixDelete := t.opts.KeyPrefixDeleteFunc(key)
+	if keyPrefixDelete != t.opts.KeyPrefixDeleteFunc(sentinel) {
+		return
+	}
+
+	for {
+		nk, nv := cursor.Next()
+		if nk == nil || nv == nil {
+			break
+		}
+
+		sentinels = append(sentinels, nk)
+		pns = append(pns, bitpage.PageNum(utils.BytesToUint32(nv)))
+
+		if bytes.Equal(sentinel, consts.BdbMaxKey) || keyPrefixDelete != t.opts.KeyPrefixDeleteFunc(nk) {
+			break
+		}
+	}
+
+	return
 }
 
 func (t *Bitree) BdbDiskSize() int64 {
@@ -172,7 +210,6 @@ func (tp *TxPool) Load() *bdb.ReadTx {
 	rTx := tp.rTx
 	rTx.Ref()
 	tp.lock.RUnlock()
-
 	return rTx
 }
 
@@ -206,6 +243,5 @@ func (tp *TxPool) Close() error {
 	tp.lock.RLock()
 	rTx := tp.rTx
 	tp.lock.RUnlock()
-
 	return rTx.Unref(false)
 }

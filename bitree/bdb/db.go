@@ -26,6 +26,8 @@ import (
 	"unsafe"
 
 	"github.com/cockroachdb/errors"
+	"github.com/zuoyebang/bitalosdb/internal/bitask"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
@@ -69,7 +71,7 @@ type DB struct {
 
 	ops struct {
 		writeAt           func(b []byte, off int64) (n int, err error)
-		pushTaskCB        func(task *base.BitpageTaskData)
+		pushTaskCB        func(task *bitask.BitpageTaskData)
 		checkPageSplitted func(pn uint32) bool
 	}
 
@@ -116,36 +118,36 @@ func (db *DB) String() string {
 	return fmt.Sprintf("DB<%q>", db.path)
 }
 
-func Open(path string, options *base.BdbOptions) (*DB, error) {
+func Open(path string, opts *options.BdbOptions) (*DB, error) {
 	db := &DB{
 		opened: true,
 	}
 
-	if options == nil {
-		options = base.DefaultBdbOptions
+	if opts == nil {
+		opts = options.DefaultBdbOptions
 	}
 
-	db.NoSync = options.NoSync
-	db.NoGrowSync = options.NoGrowSync
-	db.MmapFlags = options.MmapFlags
-	db.NoFreelistSync = options.NoFreelistSync
-	db.FreelistType = options.FreelistType
-	db.Mlock = options.Mlock
-	db.logger = options.Logger
-	db.cmp = options.Cmp
-	db.index = options.Index
+	db.NoSync = opts.NoSync
+	db.NoGrowSync = opts.NoGrowSync
+	db.MmapFlags = opts.MmapFlags
+	db.NoFreelistSync = opts.NoFreelistSync
+	db.FreelistType = opts.FreelistType
+	db.Mlock = opts.Mlock
+	db.logger = opts.Logger
+	db.cmp = opts.Cmp
+	db.index = opts.Index
 
 	db.MaxBatchSize = DefaultMaxBatchSize
 	db.MaxBatchDelay = DefaultMaxBatchDelay
 	db.AllocSize = consts.BdbAllocSize
 
 	flag := os.O_RDWR
-	if options.ReadOnly {
+	if opts.ReadOnly {
 		flag = os.O_RDONLY
 		db.readOnly = true
 	}
 
-	db.openFile = options.OpenFile
+	db.openFile = opts.OpenFile
 	if db.openFile == nil {
 		db.openFile = os.OpenFile
 	}
@@ -157,16 +159,16 @@ func Open(path string, options *base.BdbOptions) (*DB, error) {
 	}
 	db.path = db.file.Name()
 
-	if err = flock(db, !db.readOnly, options.Timeout); err != nil {
+	if err = flock(db, !db.readOnly, opts.Timeout); err != nil {
 		_ = db.close()
 		return nil, err
 	}
 
 	db.ops.writeAt = db.file.WriteAt
-	db.ops.pushTaskCB = options.PushTaskCB
-	db.ops.checkPageSplitted = options.CheckPageSplitted
+	db.ops.pushTaskCB = opts.BitpageTaskPushFunc
+	db.ops.checkPageSplitted = opts.CheckPageSplitted
 
-	if db.pageSize = options.PageSize; db.pageSize == 0 {
+	if db.pageSize = opts.PageSize; db.pageSize == 0 {
 		db.pageSize = defaultPageSize
 	}
 
@@ -196,7 +198,7 @@ func Open(path string, options *base.BdbOptions) (*DB, error) {
 		},
 	}
 
-	if err := db.mmap(options.InitialMmapSize); err != nil {
+	if err := db.mmap(opts.InitialMmapSize); err != nil {
 		_ = db.close()
 		return nil, err
 	}
@@ -233,7 +235,7 @@ func (db *DB) loadFreelist() {
 			db.freelist.readIDs(db.freepages())
 		} else {
 			dbMeta := db.meta()
-			db.logger.Infof("bdb loadFreelist [bdb:%s] [version:%d] [txid:%d]", db.path, dbMeta.version, dbMeta.txid)
+			db.logger.Infof("[BDB %d] load freelist [version:%d] [txid:%d]", db.index, dbMeta.version, dbMeta.txid)
 			if dbMeta.version == versionFreelistBitmap {
 				db.freelist.readFromBitmap(db.page(dbMeta.freelist))
 			} else {
@@ -566,7 +568,8 @@ func (db *DB) freePagesForTask(pids pgids) {
 	sort.Sort(pids)
 
 	var skipPid pgid
-	pns := make([]uint32, 0, 1<<4)
+	pns := make([]uint32, 0, 16)
+	pnsDup := make(map[uint32]struct{})
 
 	parseValue := func(v []byte) {
 		if len(v) != 4 {
@@ -575,7 +578,10 @@ func (db *DB) freePagesForTask(pids pgids) {
 
 		pn := utils.BytesToUint32(v)
 		if db.ops.checkPageSplitted(pn) {
-			pns = append(pns, pn)
+			if _, exist := pnsDup[pn]; !exist {
+				pns = append(pns, pn)
+				pnsDup[pn] = struct{}{}
+			}
 		}
 	}
 
@@ -617,11 +623,11 @@ func (db *DB) freePagesForTask(pids pgids) {
 		return
 	}
 
-	task := &base.BitpageTaskData{
-		Event: base.BitpageEventFreePage,
+	db.ops.pushTaskCB(&bitask.BitpageTaskData{
+		Index: db.index,
+		Event: bitask.BitpageEventFreePage,
 		Pns:   pns,
-	}
-	db.ops.pushTaskCB(task)
+	})
 }
 
 type txsById []*Tx

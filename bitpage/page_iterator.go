@@ -99,18 +99,20 @@ func (i *PageIterator) findNextEntry() {
 		key := *i.iterKey
 
 		switch key.Kind() {
-		case base.InternalKeyKindSet:
+		case internalKeyKindSet:
 			i.keyBuf = append(i.keyBuf[:0], key.UserKey...)
 			*i.key = base.MakeInternalKey2(i.keyBuf, key.Trailer)
 			i.value = i.iterValue
 			i.iterValidityState = IterValid
 			return
-		case base.InternalKeyKindDelete:
+
+		case internalKeyKindDelete, internalKeyKindPrefixDelete:
 			i.keyBuf = append(i.keyBuf[:0], key.UserKey...)
 			*i.key = base.MakeInternalKey2(i.keyBuf, key.Trailer)
 			i.value = nil
 			i.iterValidityState = IterValid
 			return
+
 		default:
 			i.err = errors.Errorf("bitpage: invalid internal key kind %s", key.Kind())
 			i.iterValidityState = IterExhausted
@@ -155,13 +157,13 @@ func (i *PageIterator) findPrevEntry() {
 		}
 
 		switch key.Kind() {
-		case base.InternalKeyKindSet:
+		case internalKeyKindSet:
 			i.keyBuf = append(i.keyBuf[:0], key.UserKey...)
 			*i.key = base.MakeInternalKey2(i.keyBuf, key.Trailer)
 			i.value = i.iterValue
 			i.iterValidityState = IterValid
 			i.iterKey, i.iterValue = i.iter.Prev()
-		case base.InternalKeyKindDelete:
+		case internalKeyKindDelete, internalKeyKindPrefixDelete:
 			i.keyBuf = append(i.keyBuf[:0], key.UserKey...)
 			*i.key = base.MakeInternalKey2(i.keyBuf, key.Trailer)
 			i.value = nil

@@ -31,7 +31,7 @@ func TestSkl_Arrat_Merging(t *testing.T) {
 	var ikey internalKey
 
 	valbuf := []byte("val4")
-	addval, closer := base.EncodeInternalValue(valbuf, 1, base.InternalKeyKindSetBithash)
+	addval, closer := base.EncodeInternalValue(valbuf, 1, internalKeyKindSetBithash)
 	defer func() {
 		if closer != nil {
 			closer()
@@ -57,7 +57,7 @@ func TestSkl_Arrat_Merging(t *testing.T) {
 		}
 
 		for i := 0; i < len(cases); i++ {
-			ikey = makeInternalKey(testMakeKey(cases[i].key), cases[i].seq, cases[i].kind)
+			ikey = makeInternalKey(makeTestKey(cases[i].key), cases[i].seq, cases[i].kind)
 			if cases[i].kind == internalKeyKindSet {
 				if err := wr.Set(ikey, addval); err != nil {
 					t.Fatal("set fail", ikey.String(), err)
@@ -73,7 +73,7 @@ func TestSkl_Arrat_Merging(t *testing.T) {
 
 	readData := func(pg *page, cases []rtest) {
 		for i := 0; i < len(cases); i++ {
-			key := testMakeKey(cases[i].key)
+			key := makeTestKey(cases[i].key)
 			v, vexist, vcloser, _ := pg.get(key, hash.Crc32(key))
 			if cases[i].exist {
 				require.Equal(t, true, vexist)

@@ -180,7 +180,7 @@ func (s *shard) getIter(key []byte) (val []byte, valPool func(), _ bool) {
 
 			v = v[:vLen-LFU_META_LENGTH]
 
-			val, valPool = bytepools.DefaultBytePools.MakeValue(v)
+			val, valPool = bytepools.ReaderBytePools.MakeValue(v)
 		}
 		atomic.AddInt64(&s.atomic.hits, 1)
 	} else {

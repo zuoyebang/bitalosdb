@@ -15,7 +15,6 @@
 package bitree
 
 import (
-	"fmt"
 	"io"
 	"time"
 
@@ -23,11 +22,11 @@ import (
 	"github.com/zuoyebang/bitalosdb/bitpage"
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
-	"github.com/zuoyebang/bitalosdb/internal/humanize"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 )
 
-func (t *Bitree) newBitableIter(o *base.IterOptions) *bitable.BitableIterator {
+func (t *Bitree) newBitableIter(o *options.IterOptions) *bitable.BitableIterator {
 	if t.btable == nil {
 		return nil
 	}
@@ -52,9 +51,9 @@ func (t *Bitree) bitableGet(key []byte) ([]byte, io.Closer, error) {
 	return t.btable.Get(key)
 }
 
-func (t *Bitree) bitableDelete(key []byte) (bool, error) {
+func (t *Bitree) bitableDelete(key []byte) error {
 	if t.btable == nil || !t.opts.IsFlushedBitableCB() {
-		return false, nil
+		return nil
 	}
 
 	val, closer, err := t.btable.Get(key)
@@ -62,12 +61,12 @@ func (t *Bitree) bitableDelete(key []byte) (bool, error) {
 		_ = closer.Close()
 	}
 	if err == base.ErrNotFound {
-		return false, nil
+		return nil
 	}
 
 	t.DeleteBithashKey(val)
 
-	return true, t.btable.Delete(key)
+	return t.btable.Delete(key)
 }
 
 func (t *Bitree) ManualCompact() error {
@@ -79,18 +78,16 @@ func (t *Bitree) ManualCompact() error {
 	return err
 }
 
-func (t *Bitree) CompactBitreeToBitable(jobId int) (pn bitpage.PageNum) {
+func (t *Bitree) CompactBitreeToBitable() (pn bitpage.PageNum) {
 	if t.btable == nil {
 		return
 	}
 
-	var size int
-	logFlag := fmt.Sprintf("[COMPACTBITABLE %d] bitree compact to bitable index:%d", jobId, t.index)
-	start := time.Now()
+	t.dbState.WaitBitowerHighPriority(t.index)
+	t.dbState.LockBitowerWrite(t.index)
+	defer t.dbState.UnlockBitowerWrite(t.index)
 
-	t.dbState.WaitHighPriority()
-	t.dbState.LockDbWrite()
-	defer t.dbState.UnlockDbWrite()
+	start := time.Now()
 
 	deleteBitable := func(batch *bitable.BitableBatch, key []byte) {
 		btVal, closer, btErr := t.bitableGet(key)
@@ -110,9 +107,6 @@ func (t *Bitree) CompactBitreeToBitable(jobId int) (pn bitpage.PageNum) {
 		defer t.btable.OpenAutomaticCompactions()
 
 		iter := t.newBitreeIter(nil)
-		if iter == nil {
-			return ErrBitreeIterNil
-		}
 		defer iter.Close()
 
 		iter.SetCompact()
@@ -145,7 +139,7 @@ func (t *Bitree) CompactBitreeToBitable(jobId int) (pn bitpage.PageNum) {
 			}
 
 			if err != nil {
-				t.opts.Logger.Errorf("%s flushToBitable write fail err:%s", logFlag, err)
+				t.opts.Logger.Errorf("[COMPACTBITABLE %d] flushToBitable write fail err:%s", t.index, err)
 				err = nil
 			}
 		}
@@ -159,8 +153,9 @@ func (t *Bitree) CompactBitreeToBitable(jobId int) (pn bitpage.PageNum) {
 		batch = nil
 		return err
 	}
+
 	if err := flushToBitable(consts.CompactToBitableCiMaxSize); err != nil {
-		t.opts.Logger.Errorf("%s flushToBitable fail err:%v", logFlag, err)
+		t.opts.Logger.Errorf("[COMPACTBITABLE %d] flushToBitable fail err:%s", t.index, err)
 		return
 	}
 
@@ -216,21 +211,16 @@ func (t *Bitree) CompactBitreeToBitable(jobId int) (pn bitpage.PageNum) {
 
 	if err := resetBitree(); err != nil {
 		pn = nilPageNum
-		t.opts.Logger.Errorf("%s bdbReset fail err:%v", logFlag, err)
+		t.opts.Logger.Errorf("[COMPACTBITABLE %d] bdbReset fail err:%s", t.index, err)
 	}
 
 	if !t.BdbUpdate() {
-		t.opts.Logger.Errorf("%s bdb txPool swaptx fail", logFlag)
+		t.opts.Logger.Errorf("[COMPACTBITABLE %d] bdb txPool swaptx fail", t.index)
 	}
 
 	t.bpage.ResetStats()
+	t.opts.Logger.Infof("[COMPACTBITABLE %d] compact finish cost:%.3fs", t.index, time.Since(start).Seconds())
 
-	duration := time.Since(start).Seconds()
-	t.opts.Logger.Infof("%s done written(%s), in %.3fs, output rate %s/s",
-		logFlag,
-		humanize.Uint64(uint64(size)),
-		duration,
-		humanize.Uint64(uint64(float64(size)/duration)))
 	return
 }
 

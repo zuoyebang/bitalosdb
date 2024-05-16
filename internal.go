@@ -17,17 +17,20 @@ package bitalosdb
 import "github.com/zuoyebang/bitalosdb/internal/base"
 
 const (
-	fileTypeLog  = base.FileTypeLog
-	fileTypeLock = base.FileTypeLock
-	fileTypeMeta = base.FileTypeMeta
+	fileTypeLog      = base.FileTypeLog
+	fileTypeLock     = base.FileTypeLock
+	fileTypeManifest = base.FileTypeManifest
+	fileTypeMeta     = base.FileTypeMeta
+	fileTypeCurrent  = base.FileTypeCurrent
 )
 
 const (
-	InternalKeyKindDelete  = base.InternalKeyKindDelete
-	InternalKeyKindSet     = base.InternalKeyKindSet
-	InternalKeyKindLogData = base.InternalKeyKindLogData
-	InternalKeyKindMax     = base.InternalKeyKindMax
-	InternalKeySeqNumMax   = base.InternalKeySeqNumMax
+	InternalKeyKindDelete       = base.InternalKeyKindDelete
+	InternalKeyKindSet          = base.InternalKeyKindSet
+	InternalKeyKindLogData      = base.InternalKeyKindLogData
+	InternalKeyKindPrefixDelete = base.InternalKeyKindPrefixDelete
+	InternalKeyKindMax          = base.InternalKeyKindMax
+	InternalKeySeqNumMax        = base.InternalKeySeqNumMax
 )
 
 type InternalKeyKind = base.InternalKeyKind
@@ -46,4 +49,8 @@ type Split = base.Split
 
 type Comparer = base.Comparer
 
+type Logger = base.Logger
+
 var DefaultComparer = base.DefaultComparer
+
+var DefaultLogger = base.DefaultLogger

@@ -116,7 +116,7 @@ func initManifest(b *Bithash) error {
 		return err
 	}
 
-	b.logger.Infof("bithash openManifest success index:%d version:%d len:%d uses:%d frees:%d",
+	b.logger.Infof("[BITHASH %d] openManifest success version:%d len:%d uses:%d frees:%d",
 		b.index,
 		b.meta.version,
 		b.meta.mu.manifestMmap.Len(),

@@ -60,8 +60,10 @@ func TestParseFilename(t *testing.T) {
 
 func TestFilenameRoundTrip(t *testing.T) {
 	testCases := map[FileType]bool{
-		FileTypeLock: false,
-		FileTypeLog:  true,
+		FileTypeCurrent:  false,
+		FileTypeLock:     false,
+		FileTypeLog:      true,
+		FileTypeManifest: true,
 	}
 	fs := vfs.NewMem()
 	for fileType, numbered := range testCases {

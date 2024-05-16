@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
+	"github.com/zuoyebang/bitalosdb/internal/bitask"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
 	"github.com/zuoyebang/bitalosdb/internal/humanize"
 )
@@ -109,14 +109,14 @@ func (p *page) flush(sentinel []byte, logTag string) (err error) {
 	if sentinel != nil && p.bp.pageNoneSplit(p.pn) {
 		newSize := atEntry.inuseBytes()
 		if newSize > p.bp.opts.BitpageSplitSize {
-			task := &base.BitpageTaskData{
-				Event:    base.BitpageEventSplit,
+			p.bp.opts.BitpageTaskPushFunc(&bitask.BitpageTaskData{
+				Index:    p.bp.index,
+				Event:    bitask.BitpageEventSplit,
 				Pn:       uint32(p.pn),
 				Sentinel: sentinel,
-			}
-			p.bp.opts.PushTaskCB(task)
+			})
 			p.bp.meta.setSplitState(p.pn, pageSplitStateSendTask)
-			p.bp.opts.Logger.Infof("%s pushTask event:2", logTag)
+			p.bp.opts.Logger.Infof("%s push split task", logTag)
 		}
 	}
 
@@ -126,7 +126,8 @@ func (p *page) flush(sentinel []byte, logTag string) (err error) {
 func (p *page) runFlush(flushing flushableList, oldSize uint64, logTag string) (atEntry *flushableEntry, retErr error) {
 	var iiter internalIterator
 	var at *arrayTable
-	var keyNum int
+	var keyPrefixDeleteKind, prefixDeleteNum int
+	var lastPrefixDelete uint64
 
 	startTime := time.Now()
 	if len(flushing) == 1 {
@@ -151,15 +152,39 @@ func (p *page) runFlush(flushing flushableList, oldSize uint64, logTag string) (
 		}
 	}()
 
+	deleteBitableKey := func(ik *internalKey) {
+		if err := p.bp.opts.BitableDeleteCB(ik.UserKey); err != nil {
+			p.bp.opts.Logger.Errorf("%s BitableDeleteCB fail key:%s err:%s", logTag, ik.String(), err)
+		}
+	}
+
+	checkKeyPrefixDelete := func(ik *internalKey) bool {
+		if lastPrefixDelete == 0 {
+			return false
+		}
+
+		keyPrefixDelete := p.bp.opts.KeyPrefixDeleteFunc(ik.UserKey)
+		if lastPrefixDelete == keyPrefixDelete {
+			deleteBitableKey(ik)
+			return true
+		} else {
+			lastPrefixDelete = 0
+			return false
+		}
+	}
+
 	p.bp.opts.Logger.Infof("%s runFlush start flushing(%d)", logTag, len(flushing))
 
 	for iterKey, iterValue := iter.First(); iterKey != nil; iterKey, iterValue = iter.Next() {
 		switch iterKey.Kind() {
 		case internalKeyKindSet:
+			if checkKeyPrefixDelete(iterKey) {
+				prefixDeleteNum++
+				continue
+			}
+
 			if p.bp.opts.CheckExpireCB(iterKey.UserKey, iterValue) {
-				if _, err := p.bp.opts.BitableDeleteCB(iterKey.UserKey); err != nil {
-					p.bp.opts.Logger.Errorf("%s expire-data BitableDeleteCB fail err:%s", logTag, err)
-				}
+				deleteBitableKey(iterKey)
 			} else {
 				if at == nil {
 					at, atEntry, retErr = p.makeNewArrayTable()
@@ -170,12 +195,14 @@ func (p *page) runFlush(flushing flushableList, oldSize uint64, logTag string) (
 				if _, err := at.writeItem(iterKey.UserKey, iterValue); err != nil {
 					p.bp.opts.Logger.Errorf("%s writeItem fail err:%s", logTag, err)
 				}
-				keyNum++
 			}
+
 		case internalKeyKindDelete:
-			if _, err := p.bp.opts.BitableDeleteCB(iterKey.UserKey); err != nil {
-				p.bp.opts.Logger.Errorf("%s deletekind-data BitableDeleteCB fail err:%s", logTag, err)
-			}
+			deleteBitableKey(iterKey)
+
+		case internalKeyKindPrefixDelete:
+			lastPrefixDelete = p.bp.opts.KeyPrefixDeleteFunc(iterKey.UserKey)
+			keyPrefixDeleteKind++
 		}
 	}
 
@@ -192,14 +219,15 @@ func (p *page) runFlush(flushing flushableList, oldSize uint64, logTag string) (
 	p.bp.meta.setNextArrayTableFileNum(p.pn)
 
 	duration := time.Since(startTime)
-	p.bp.opts.Logger.Infof("%s runFlush finish flushed(%s) at(%s) atVersion(%d) atSize(%s) atNum(%d), keyNum(%d), in %.3fs",
+	p.bp.opts.Logger.Infof("%s runFlush finish flushed(%s) at(%s) atVersion(%d) atSize(%s) keys(%d) keysPdKind(%d) pdNum(%d), in %.3fs",
 		logTag,
 		humanize.Uint64(oldSize),
 		at.filename,
 		at.getVersion(),
 		humanize.Uint64(uint64(at.size)),
 		at.itemCount(),
-		keyNum,
+		keyPrefixDeleteKind,
+		prefixDeleteNum,
 		duration.Seconds(),
 	)
 

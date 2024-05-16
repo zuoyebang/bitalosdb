@@ -15,6 +15,7 @@
 package bitalosdb
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -83,34 +84,33 @@ func TestLogRecycler(t *testing.T) {
 }
 
 func TestRecycleLogs(t *testing.T) {
-	d, err := Open("./data", &Options{})
-	require.NoError(t, err)
+	defer os.RemoveAll(testDirname)
+	os.RemoveAll(testDirname)
+
+	db := openTestDB(testDirname, nil)
+	bitower := db.bitowers[testSlotId]
 
 	logNum := func() FileNum {
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		return d.mu.log.queue[len(d.mu.log.queue)-1].fileNum
+		bitower.mu.Lock()
+		defer bitower.mu.Unlock()
+		return bitower.mu.log.queue[len(bitower.mu.log.queue)-1].fileNum
 	}
 
-	require.EqualValues(t, []FileNum(nil), d.logRecycler.logNums())
+	require.EqualValues(t, []FileNum(nil), bitower.logRecycler.logNums())
 	curLog := logNum()
-
-	require.NoError(t, d.Flush())
-
-	require.EqualValues(t, []FileNum{curLog}, d.logRecycler.logNums())
+	require.NoError(t, db.Set(makeTestSlotKey([]byte("a")), nil, nil))
+	require.NoError(t, bitower.Flush())
+	require.EqualValues(t, []FileNum{curLog}, bitower.logRecycler.logNums())
 	curLog = logNum()
+	require.NoError(t, db.Set(makeTestSlotKey([]byte("b")), nil, nil))
+	require.NoError(t, bitower.Flush())
+	require.EqualValues(t, []FileNum{curLog}, bitower.logRecycler.logNums())
+	require.NoError(t, db.Close())
 
-	require.NoError(t, d.Flush())
-
-	require.EqualValues(t, []FileNum{curLog}, d.logRecycler.logNums())
-
-	require.NoError(t, d.Close())
-
-	d, err = Open("./data", &Options{})
-	require.NoError(t, err)
-
-	if recycled := d.logRecycler.logNums(); len(recycled) != 0 {
+	db = openTestDB(testDirname, nil)
+	bitower = db.bitowers[testSlotId]
+	if recycled := bitower.logRecycler.logNums(); len(recycled) != 0 {
 		t.Fatalf("expected no recycled WAL files after recovery, but found %d", recycled)
 	}
-	require.NoError(t, d.Close())
+	require.NoError(t, db.Close())
 }
