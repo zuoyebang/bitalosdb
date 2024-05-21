@@ -38,7 +38,7 @@ import (
 
 const (
 	maxKeySize           = 33 << 10
-	maxValueSize         = 16 << 20
+	maxValueSize         = 256 << 20
 	blockRestartInterval = 16
 )
 

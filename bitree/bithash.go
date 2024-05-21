@@ -136,7 +136,7 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 
 	compactFile := func(srcFn bithash.FileNum) (e error) {
 		var iter *bithash.TableIterator
-		var mgKeyNum, delKeyNum int
+		var mgKeyNum, delKeyNum, expireKeyNum int
 
 		start := time.Now()
 
@@ -154,8 +154,8 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 				if delKeyNum > 0 {
 					delKeyTotal += delKeyNum
 				}
-				t.opts.Logger.Infof("%s compactFile %d to %d done mgKeyNum:%d delKeyNum:%d cost:%.4f",
-					logTag, srcFn, dstFn, mgKeyNum, delKeyNum, cost)
+				t.opts.Logger.Infof("%s compactFile %d to %d done mgKeyNum:%d delKeyNum:%d expireKeyNum:%d cost:%.4f",
+					logTag, srcFn, dstFn, mgKeyNum, delKeyNum, expireKeyNum, cost)
 			} else {
 				t.opts.Logger.Errorf("%s compactFile %d to %d fail err:%s", logTag, srcFn, dstFn, e)
 			}
@@ -177,8 +177,13 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 				delFnMap[fn] = true
 			}
 
-			khash := hash.Crc32(ik.UserKey)
+			if t.opts.KvCheckExpire(ik.UserKey, v) {
+				delKeyNum++
+				expireKeyNum++
+				continue
+			}
 
+			khash := hash.Crc32(ik.UserKey)
 			if !findKey(ik, khash) {
 				delKeyNum++
 				continue

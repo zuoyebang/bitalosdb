@@ -153,6 +153,10 @@ func (p *page) runFlush(flushing flushableList, oldSize uint64, logTag string) (
 	}()
 
 	deleteBitableKey := func(ik *internalKey) {
+		if !p.bp.opts.UseBitable {
+			return
+		}
+
 		if err := p.bp.opts.BitableDeleteCB(ik.UserKey); err != nil {
 			p.bp.opts.Logger.Errorf("%s BitableDeleteCB fail key:%s err:%s", logTag, ik.String(), err)
 		}
