@@ -61,11 +61,11 @@ func (i FlushInfo) SafeFormat(w redact.SafePrinter, _ rune) {
 	}
 
 	if !i.Done {
-		w.Printf("[BITOWER %d] flushing %d memtable to bitforest", i.Index, i.Input)
+		w.Printf("[BITOWER %d] flushing %d memtable to bitree", i.Index, i.Input)
 		return
 	}
 
-	w.Printf("[BITOWER %d] flushed %d memtable to bitforest iterated(%s) written(%s) keys(%d) keysPdKind(%d) pdNum(%d), in %.3fs, output rate %s/s",
+	w.Printf("[BITOWER %d] flushed %d memtable to bitree iterated(%s) written(%s) keys(%d) keysPdKind(%d) pdNum(%d), in %.3fs, output rate %s/s",
 		i.Index,
 		i.Input,
 		humanize.Uint64(i.Iterated),
