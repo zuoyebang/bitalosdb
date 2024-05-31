@@ -162,13 +162,14 @@ func (p *page) runFlush(flushing flushableList, oldSize uint64, logTag string) (
 		}
 	}
 
-	checkKeyPrefixDelete := func(ik *internalKey) bool {
+	checkKeyPrefixDelete := func(ik *internalKey, iv []byte) bool {
 		if lastPrefixDelete == 0 {
 			return false
 		}
 
 		keyPrefixDelete := p.bp.opts.KeyPrefixDeleteFunc(ik.UserKey)
 		if lastPrefixDelete == keyPrefixDelete {
+			p.bp.deleteBithashKey(iv)
 			deleteBitableKey(ik)
 			return true
 		} else {
@@ -182,7 +183,7 @@ func (p *page) runFlush(flushing flushableList, oldSize uint64, logTag string) (
 	for iterKey, iterValue := iter.First(); iterKey != nil; iterKey, iterValue = iter.Next() {
 		switch iterKey.Kind() {
 		case internalKeyKindSet:
-			if checkKeyPrefixDelete(iterKey) {
+			if checkKeyPrefixDelete(iterKey, iterValue) {
 				prefixDeleteNum++
 				continue
 			}
