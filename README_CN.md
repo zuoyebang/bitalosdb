@@ -21,9 +21,7 @@
 
 ## 性能报告
 
-- bitalosdb在性能上持续精进，此次性能测试基于bitalosdb v4.0；作为rocksdb的替代品，选取同时期rocksdb稳定版做性能对比。
-
-- bitalosdb v5.0正在研发中，读性能进一步提升，在内部实践并稳定运行后，发布新开源版本。
+- bitalosdb在性能上持续精进，此次性能测试基于bitalosdb v5.0；作为rocksdb的替代品，选取同时期rocksdb稳定版做性能对比。
 
 ### 硬件
 
