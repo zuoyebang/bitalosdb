@@ -405,8 +405,12 @@ func (d *DB) IsClosed() bool {
 
 func (d *DB) closeTask() {
 	close(d.taskClosed)
-	d.memFlushTask.Close()
-	d.bpageTask.Close()
+	if d.memFlushTask != nil {
+		d.memFlushTask.Close()
+	}
+	if d.bpageTask != nil {
+		d.bpageTask.Close()
+	}
 	d.taskWg.Wait()
 }
 
