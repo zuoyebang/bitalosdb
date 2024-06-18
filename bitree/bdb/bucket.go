@@ -20,10 +20,11 @@ import (
 	"unsafe"
 
 	"github.com/cockroachdb/errors"
+	"github.com/zuoyebang/bitalosdb/internal/consts"
 )
 
 const (
-	MaxKeySize   = 10 << 10
+	MaxKeySize   = consts.MaxKeySize + 1<<8
 	MaxValueSize = (1 << 31) - 2
 )
 
