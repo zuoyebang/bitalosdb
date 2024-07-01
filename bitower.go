@@ -169,36 +169,38 @@ func openBitower(d *DB, index int) (*Bitower, error) {
 		}
 	}
 
-	newLogNum := s.mu.metaEdit.GetNextFileNum()
-	sme := &bitowerMetaEditor{MinUnflushedLogNum: newLogNum}
-	if err = s.metaApply(sme); err != nil {
-		return nil, err
+	if !d.opts.DisableWAL {
+		newLogNum := s.mu.metaEdit.GetNextFileNum()
+		sme := &bitowerMetaEditor{MinUnflushedLogNum: newLogNum}
+		if err = s.metaApply(sme); err != nil {
+			return nil, err
+		}
+
+		newLogName := s.makeWalFilename(newLogNum)
+		s.mu.log.queue = append(s.mu.log.queue, fileInfo{fileNum: newLogNum, fileSize: 0})
+		logFile, err := d.opts.FS.Create(newLogName)
+		if err != nil {
+			return nil, err
+		}
+		if err = s.walDir.Sync(); err != nil {
+			return nil, err
+		}
+
+		d.opts.EventListener.WALCreated(WALCreateInfo{
+			Index:   index,
+			Path:    newLogName,
+			FileNum: newLogNum,
+		})
+
+		s.mu.mem.queue[len(s.mu.mem.queue)-1].logNum = newLogNum
+
+		logFile = vfs.NewSyncingFile(logFile, vfs.SyncingFileOptions{
+			BytesPerSync:    d.opts.WALBytesPerSync,
+			PreallocateSize: s.walPreallocateSize(),
+		})
+		s.mu.log.LogWriter = record.NewLogWriter(logFile, newLogNum)
+		s.mu.log.LogWriter.SetMinSyncInterval(d.opts.WALMinSyncInterval)
 	}
-
-	newLogName := s.makeWalFilename(newLogNum)
-	s.mu.log.queue = append(s.mu.log.queue, fileInfo{fileNum: newLogNum, fileSize: 0})
-	logFile, err := d.opts.FS.Create(newLogName)
-	if err != nil {
-		return nil, err
-	}
-	if err = s.walDir.Sync(); err != nil {
-		return nil, err
-	}
-
-	d.opts.EventListener.WALCreated(WALCreateInfo{
-		Index:   index,
-		Path:    newLogName,
-		FileNum: newLogNum,
-	})
-
-	s.mu.mem.queue[len(s.mu.mem.queue)-1].logNum = newLogNum
-
-	logFile = vfs.NewSyncingFile(logFile, vfs.SyncingFileOptions{
-		BytesPerSync:    d.opts.WALBytesPerSync,
-		PreallocateSize: s.walPreallocateSize(),
-	})
-	s.mu.log.LogWriter = record.NewLogWriter(logFile, newLogNum)
-	s.mu.log.LogWriter.SetMinSyncInterval(d.opts.WALMinSyncInterval)
 
 	s.updateReadState()
 
@@ -479,25 +481,27 @@ func (s *Bitower) newBitreeIter(o *options.IterOptions) (iters []base.InternalIt
 }
 
 func (s *Bitower) checkpoint(fs vfs.FS, destDir string, isSync bool) error {
-	s.mu.Lock()
-	memQueue := s.mu.mem.queue
-	s.mu.Unlock()
+	if !s.db.opts.DisableWAL {
+		s.mu.Lock()
+		memQueue := s.mu.mem.queue
+		s.mu.Unlock()
 
-	if isSync {
-		if err := s.db.LogData(nil, s.index, Sync); err != nil {
-			return err
+		if isSync {
+			if err := s.db.LogData(nil, s.index, Sync); err != nil {
+				return err
+			}
 		}
-	}
 
-	for i := range memQueue {
-		logNum := memQueue[i].logNum
-		if logNum == 0 {
-			continue
-		}
-		srcPath := base.MakeFilepath(fs, s.walDirname, fileTypeLog, logNum)
-		destPath := fs.PathJoin(destDir, fs.PathBase(srcPath))
-		if err := vfs.Copy(fs, srcPath, destPath); err != nil {
-			return err
+		for i := range memQueue {
+			logNum := memQueue[i].logNum
+			if logNum == 0 {
+				continue
+			}
+			srcPath := base.MakeFilepath(fs, s.walDirname, fileTypeLog, logNum)
+			destPath := fs.PathJoin(destDir, fs.PathBase(srcPath))
+			if err := vfs.Copy(fs, srcPath, destPath); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -525,7 +529,9 @@ func (s *Bitower) Close() (err error) {
 		s.mu.compact.cond.Wait()
 	}
 
-	err = utils.FirstError(err, s.mu.log.Close())
+	if s.mu.log.LogWriter != nil {
+		err = utils.FirstError(err, s.mu.log.Close())
+	}
 
 	s.readState.val.unref()
 

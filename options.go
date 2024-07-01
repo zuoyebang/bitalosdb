@@ -195,13 +195,7 @@ func (o *Options) EnsureDefaults() *Options {
 		o.private.logInit = true
 	}
 	if o.FS == nil {
-		o.FS = vfs.WithDiskHealthChecks(vfs.Default, 5*time.Second,
-			func(name string, duration time.Duration) {
-				o.EventListener.DiskSlow(DiskSlowInfo{
-					Path:     name,
-					Duration: duration,
-				})
-			})
+		o.FS = vfs.Default
 	}
 	if o.CompactInfo.StartHour <= 0 {
 		o.CompactInfo.StartHour = 0
