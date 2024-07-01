@@ -38,19 +38,20 @@ func Open(dirname string, opts *Options) (db *DB, err error) {
 	}
 
 	d := &DB{
-		dirname:    dirname,
-		walDirname: opts.WALDir,
-		opts:       opts,
-		optspool:   optsPool,
-		cmp:        opts.Comparer.Compare,
-		equal:      opts.Comparer.Equal,
-		split:      opts.Comparer.Split,
-		timeNow:    time.Now,
-		compressor: compress.SetCompressor(opts.CompressionType),
-		cache:      nil,
-		dbState:    optsPool.DbState,
-		taskClosed: make(chan struct{}),
-		meta:       &metaSet{},
+		dirname:             dirname,
+		walDirname:          opts.WALDir,
+		opts:                opts,
+		optspool:            optsPool,
+		cmp:                 opts.Comparer.Compare,
+		equal:               opts.Comparer.Equal,
+		split:               opts.Comparer.Split,
+		largeBatchThreshold: (opts.MemTableSize - int(memTableEmptySize)) / 2,
+		timeNow:             time.Now,
+		compressor:          compress.SetCompressor(opts.CompressionType),
+		cache:               nil,
+		dbState:             optsPool.DbState,
+		taskClosed:          make(chan struct{}),
+		meta:                &metaSet{},
 	}
 
 	defer func() {
