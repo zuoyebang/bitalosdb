@@ -8,7 +8,7 @@ require (
 	github.com/cockroachdb/redact v1.1.5
 	github.com/golang/snappy v0.0.4
 	github.com/stretchr/testify v1.9.0
-	github.com/zuoyebang/bitalostable v1.0.0
+	github.com/zuoyebang/bitalostable v1.0.1
 	golang.org/x/exp v0.0.0-20240222234643-814bf88cf225
 	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
 	golang.org/x/sys v0.18.0
