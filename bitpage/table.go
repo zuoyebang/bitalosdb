@@ -69,10 +69,12 @@ type table struct {
 	opened   bool
 	openType int
 	mmaplock sync.RWMutex
+	modTime  int64
 }
 
 func openTable(path string, opts *tableOptions) (*table, error) {
 	var err error
+	var fileStat os.FileInfo
 
 	t := &table{
 		opened: true,
@@ -88,9 +90,14 @@ func openTable(path string, opts *tableOptions) (*table, error) {
 	if err != nil {
 		return nil, err
 	}
+	fileStat, err = t.file.Stat()
+	if err != nil {
+		return nil, err
+	}
 
 	t.path = t.file.Name()
-	t.filesz = int(t.fileStatSize())
+	t.filesz = int(fileStat.Size())
+	t.modTime = fileStat.ModTime().Unix()
 
 	switch opts.openType {
 	case tableWriteMmap:

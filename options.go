@@ -51,42 +51,44 @@ type CompactEnv struct {
 type BitableOptions = options.BitableOptions
 
 type Options struct {
-	BytesPerSync                int
-	Comparer                    *Comparer
-	DisableWAL                  bool
-	EventListener               EventListener
-	MemTableSize                int
-	MemTableStopWritesThreshold int
-	WALBytesPerSync             int
-	WALDir                      string
-	WALMinSyncInterval          func() time.Duration
-	FS                          vfs.FS
-	Logger                      Logger
-	Id                          int
-	Verbose                     bool
-	LogTag                      string
-	DataType                    string
-	CompressionType             int
-	DeleteFileInternal          int
-	UseBithash                  bool
-	UseBitable                  bool
-	BitableOpts                 *options.BitableOptions
-	AutoCompact                 bool
-	CompactInfo                 CompactEnv
-	CacheSize                   int64
-	CacheType                   int
-	CacheShards                 int
-	CacheHashSize               int
-	UseMapIndex                 bool
-	UsePrefixCompress           bool
-	UseBlockCompress            bool
-	BlockCacheSize              int64
-	FlushReporter               func(int)
-	KeyHashFunc                 func([]byte) int
-	KvCheckExpireFunc           func(int, []byte, []byte) bool
-	KvTimestampFunc             func([]byte, uint8) (bool, uint64)
-	IOWriteLoadThresholdFunc    func() bool
-	KeyPrefixDeleteFunc         func([]byte) uint64
+	BytesPerSync                   int
+	Comparer                       *Comparer
+	DisableWAL                     bool
+	EventListener                  EventListener
+	MemTableSize                   int
+	MemTableStopWritesThreshold    int
+	WALBytesPerSync                int
+	WALDir                         string
+	WALMinSyncInterval             func() time.Duration
+	FS                             vfs.FS
+	Logger                         Logger
+	Id                             int
+	Verbose                        bool
+	LogTag                         string
+	DataType                       string
+	CompressionType                int
+	DeleteFileInternal             int
+	UseBithash                     bool
+	UseBitable                     bool
+	BitableOpts                    *options.BitableOptions
+	AutoCompact                    bool
+	CompactInfo                    CompactEnv
+	CacheSize                      int64
+	CacheType                      int
+	CacheShards                    int
+	CacheHashSize                  int
+	UseMapIndex                    bool
+	UsePrefixCompress              bool
+	UseBlockCompress               bool
+	BlockCacheSize                 int64
+	FlushReporter                  func(int)
+	KeyHashFunc                    func([]byte) int
+	KvCheckExpireFunc              func(int, []byte, []byte) bool
+	KvTimestampFunc                func([]byte, uint8) (bool, uint64)
+	IOWriteLoadThresholdFunc       func() bool
+	KeyPrefixDeleteFunc            func([]byte) uint64
+	FlushPrefixDeleteKeyMultiplier int
+	FlushFileLifetime              int
 
 	private struct {
 		logInit  bool
@@ -111,6 +113,8 @@ func (o *Options) ensureOptionsPool(optspool *options.OptionsPool) *options.Opti
 	optspool.BaseOptions.UsePrefixCompress = o.UsePrefixCompress
 	optspool.BaseOptions.UseBlockCompress = o.UseBlockCompress
 	optspool.BaseOptions.KeyHashFunc = o.KeyHashFunc
+	optspool.BaseOptions.FlushPrefixDeleteKeyMultiplier = o.FlushPrefixDeleteKeyMultiplier
+	optspool.BaseOptions.FlushFileLifetime = o.FlushFileLifetime
 	optspool.BaseOptions.BitpageBlockCacheSize = consts.BitpageDefaultBlockCacheSize
 	if o.UseBlockCompress && o.BlockCacheSize > 0 {
 		bitpageBlockCacheSize := o.BlockCacheSize / int64(consts.DefaultBitowerNum)

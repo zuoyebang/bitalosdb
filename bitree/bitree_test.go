@@ -312,7 +312,7 @@ func TestBitree_BitpageFlushState(t *testing.T) {
 	require.NoError(t, testBitreeClose(btree))
 }
 
-func TestBitree_BitpageFlushDelPercent(t *testing.T) {
+func TestBitree_BitpageFlushDeleteKeyRate(t *testing.T) {
 	defer os.RemoveAll(testDir)
 	os.RemoveAll(testDir)
 
@@ -341,9 +341,9 @@ func TestBitree_BitpageFlushDelPercent(t *testing.T) {
 		pageNum = pn
 	}
 
-	delPercent := btree.bpage.GetPageDelPercent(pageNum)
-	if delPercent < 0.5 {
-		t.Fatal("delpercent err", delPercent)
+	deleteKeyRate := btree.bpage.GetPageStMutableDeleteKeyRate(pageNum)
+	if deleteKeyRate < 0.5 {
+		t.Fatalf("deleteKeyRate %.2f >= 0.5", deleteKeyRate)
 	}
 	require.NoError(t, bw.Finish())
 	time.Sleep(2 * time.Second)
