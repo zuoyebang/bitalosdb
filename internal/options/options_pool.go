@@ -123,28 +123,30 @@ type CacheOptions struct {
 }
 
 type Options struct {
-	Id                    int
-	FS                    vfs.FS
-	Cmp                   base.Compare
-	Logger                base.Logger
-	Compressor            compress.Compressor
-	UseBithash            bool
-	UseBitable            bool
-	UseMapIndex           bool
-	UsePrefixCompress     bool
-	UseBlockCompress      bool
-	BitpageBlockCacheSize int64
-	BytesPerSync          int
-	KvSeparateSize        int
-	BitpageFlushSize      uint64
-	BitpageSplitSize      uint64
-	BitpageTaskPushFunc   func(*bitask.BitpageTaskData)
-	DbState               *statemachine.DbStateMachine
-	DeleteFilePacer       *base.DeletionFileLimiter
-	KeyHashFunc           func([]byte) int
-	KvCheckExpireFunc     func(int, []byte, []byte) bool
-	KvTimestampFunc       func([]byte, uint8) (bool, uint64)
-	KeyPrefixDeleteFunc   func([]byte) uint64
+	Id                             int
+	FS                             vfs.FS
+	Cmp                            base.Compare
+	Logger                         base.Logger
+	Compressor                     compress.Compressor
+	UseBithash                     bool
+	UseBitable                     bool
+	UseMapIndex                    bool
+	UsePrefixCompress              bool
+	UseBlockCompress               bool
+	BitpageBlockCacheSize          int64
+	BytesPerSync                   int
+	KvSeparateSize                 int
+	BitpageFlushSize               uint64
+	BitpageSplitSize               uint64
+	BitpageTaskPushFunc            func(*bitask.BitpageTaskData)
+	DbState                        *statemachine.DbStateMachine
+	DeleteFilePacer                *base.DeletionFileLimiter
+	KeyHashFunc                    func([]byte) int
+	KvCheckExpireFunc              func(int, []byte, []byte) bool
+	KvTimestampFunc                func([]byte, uint8) (bool, uint64)
+	KeyPrefixDeleteFunc            func([]byte) uint64
+	FlushPrefixDeleteKeyMultiplier int
+	FlushFileLifetime              int
 }
 
 func (o *Options) KvCheckExpire(key, value []byte) bool {
@@ -258,26 +260,28 @@ func InitDefaultsOptionsPool() *OptionsPool {
 	}
 
 	optspool.BaseOptions = &Options{
-		FS:                    vfs.Default,
-		Cmp:                   base.DefaultComparer.Compare,
-		Logger:                base.DefaultLogger,
-		Compressor:            compress.NoCompressor,
-		UseBithash:            true,
-		UseBitable:            false,
-		UseMapIndex:           true,
-		UsePrefixCompress:     true,
-		UseBlockCompress:      false,
-		BitpageBlockCacheSize: consts.BitpageDefaultBlockCacheSize,
-		BytesPerSync:          consts.DefaultBytesPerSync,
-		KvSeparateSize:        consts.KvSeparateSize,
-		BitpageFlushSize:      consts.BitpageFlushSize,
-		BitpageSplitSize:      consts.BitpageSplitSize,
-		DbState:               optspool.DbState,
-		DeleteFilePacer:       NewDefaultDeletionFileLimiter(),
-		KeyHashFunc:           DefaultKeyHashFunc,
-		KvCheckExpireFunc:     DefaultKvCheckExpireFunc,
-		KvTimestampFunc:       DefaultKvTimestampFunc,
-		KeyPrefixDeleteFunc:   DefaultKeyPrefixDeleteFunc,
+		FS:                             vfs.Default,
+		Cmp:                            base.DefaultComparer.Compare,
+		Logger:                         base.DefaultLogger,
+		Compressor:                     compress.NoCompressor,
+		UseBithash:                     true,
+		UseBitable:                     false,
+		UseMapIndex:                    true,
+		UsePrefixCompress:              true,
+		UseBlockCompress:               false,
+		BitpageBlockCacheSize:          consts.BitpageDefaultBlockCacheSize,
+		BytesPerSync:                   consts.DefaultBytesPerSync,
+		KvSeparateSize:                 consts.KvSeparateSize,
+		BitpageFlushSize:               consts.BitpageFlushSize,
+		BitpageSplitSize:               consts.BitpageSplitSize,
+		DbState:                        optspool.DbState,
+		DeleteFilePacer:                NewDefaultDeletionFileLimiter(),
+		KeyHashFunc:                    DefaultKeyHashFunc,
+		KvCheckExpireFunc:              DefaultKvCheckExpireFunc,
+		KvTimestampFunc:                DefaultKvTimestampFunc,
+		KeyPrefixDeleteFunc:            DefaultKeyPrefixDeleteFunc,
+		FlushPrefixDeleteKeyMultiplier: consts.DefaultFlushPrefixDeleteKeyMultiplier,
+		FlushFileLifetime:              consts.DefaultFlushFileLifetime,
 	}
 
 	brOpts := &BitreeOptions{

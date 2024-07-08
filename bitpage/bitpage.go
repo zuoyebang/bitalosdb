@@ -249,13 +249,12 @@ func (b *Bitpage) GetCacheMetrics() string {
 	return b.cache.MetricsInfo()
 }
 
-func (b *Bitpage) GetPageDelPercent(pn PageNum) float64 {
+func (b *Bitpage) GetPageStMutableDeleteKeyRate(pn PageNum) float64 {
 	p := b.GetPage(pn)
 	if p == nil {
 		return 0
 	}
-	_, _, _, delPercent := p.inuseStState()
-	return delPercent
+	return p.getStMutableDeleteKeyRate()
 }
 
 func (b *Bitpage) pageNoneSplit(pn PageNum) bool {

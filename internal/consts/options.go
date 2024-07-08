@@ -14,6 +14,8 @@
 
 package consts
 
+import "time"
+
 const (
 	DefaultBytesPerSync                int   = 1 << 20
 	DefaultMemTableSize                int   = 512 << 20
@@ -51,14 +53,19 @@ const (
 )
 
 const (
-	FlushDelPercentL1 float64 = 0.3
-	FlushDelPercentL2 float64 = 0.5
-	FlushDelPercentL3 float64 = 0.7
-	FlushDelPercentL4 float64 = 0.9
-
 	FlushItemCountL1 int = 1 << 20
 	FlushItemCountL2 int = 2 << 20
 	FlushItemCountL3 int = 3 << 20
+
+	FlushDelPercentL1 float64 = 0.3
+	FlushDelPercentL2 float64 = 0.5
+	FlushDelPercentL3 float64 = 0.65
+	FlushDelPercentL4 float64 = 0.8
+	FlushDelPercentL5 float64 = 0.9
+	FlushDelPercentL6 float64 = 0.95
+
+	DefaultFlushPrefixDeleteKeyMultiplier int = 10
+	DefaultFlushFileLifetime              int = 3 * 86400
 )
 
 const (
@@ -105,10 +112,20 @@ func CheckFlushDelPercent(delPercent float64, inuse, size uint64) bool {
 	if (delPercent > FlushDelPercentL1 && inuse > size/2) ||
 		(delPercent > FlushDelPercentL2 && inuse > size/3) ||
 		(delPercent > FlushDelPercentL3 && inuse > size/4) ||
-		(delPercent > FlushDelPercentL4 && inuse > size/5) {
+		(delPercent > FlushDelPercentL4 && inuse > size/5) ||
+		(delPercent > FlushDelPercentL5 && inuse > size/8) ||
+		(delPercent > FlushDelPercentL6 && inuse > size/10) {
 		return true
 	}
 	return false
+}
+
+func CheckFlushLifeTime(lifeTime int64, inuse, size uint64) bool {
+	if lifeTime == 0 {
+		return false
+	}
+	nowTime := time.Now().Unix()
+	return lifeTime < nowTime && inuse > size/5
 }
 
 func CheckFlushItemCount(itemCount int, inuse, size uint64) bool {

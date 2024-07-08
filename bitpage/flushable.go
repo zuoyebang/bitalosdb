@@ -22,7 +22,7 @@ import (
 type flushable interface {
 	get([]byte, uint32) ([]byte, bool, internalKeyKind, func())
 	newIter(*iterOptions) internalIterator
-	delPercent() float64
+	getKeyStats() (int, int, int)
 	itemCount() int
 	inuseBytes() uint64
 	dataBytes() uint64
@@ -31,6 +31,7 @@ type flushable interface {
 	path() string
 	idxFilePath() string
 	empty() bool
+	getModTime() int64
 }
 
 type flushableEntry struct {

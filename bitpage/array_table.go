@@ -829,8 +829,8 @@ func (a *arrayTable) newIter(opts *iterOptions) internalIterator {
 	return iter
 }
 
-func (a *arrayTable) delPercent() float64 {
-	return 0.0
+func (a *arrayTable) getKeyStats() (int, int, int) {
+	return 0, 0, 0
 }
 
 func (a *arrayTable) itemCount() int {
@@ -843,6 +843,10 @@ func (a *arrayTable) inuseBytes() uint64 {
 
 func (a *arrayTable) dataBytes() uint64 {
 	return uint64(a.header.intIndexOffset - a.header.dataOffset)
+}
+
+func (a *arrayTable) getModTime() int64 {
+	return a.tbl.modTime
 }
 
 func (a *arrayTable) close() error {
