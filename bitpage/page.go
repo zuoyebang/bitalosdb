@@ -22,6 +22,7 @@ import (
 	"github.com/zuoyebang/bitalosdb/internal/consts"
 	"github.com/zuoyebang/bitalosdb/internal/invariants"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
+	"golang.org/x/exp/rand"
 )
 
 const (
@@ -127,29 +128,6 @@ func (p *page) makeMutableForWrite(flushIdx bool) error {
 	}
 
 	p.updateReadState()
-	return nil
-}
-
-func (p *page) newSklTable(path string, fn FileNum, exist bool) error {
-	st, err := newSklTable(path, exist, p.bp)
-	if err != nil {
-		return err
-	}
-
-	invariants.SetFinalizer(st, checkSklTable)
-
-	entry := p.newFlushableEntry(st, fn)
-	entry.release = func() {
-		if err := st.close(); err != nil {
-			p.bp.opts.Logger.Errorf("bitpage close sklTable fail file:%s err:%s", path, err.Error())
-		}
-
-		if entry.obsolete {
-			p.deleteObsoleteFile(path)
-		}
-	}
-
-	p.mu.stQueue = append(p.mu.stQueue, entry)
 	return nil
 }
 
@@ -276,23 +254,11 @@ func (p *page) close(delete bool) error {
 	return nil
 }
 
-func (p *page) inuseStState() (int, uint64, int, float64) {
+func (p *page) getStMutableDeleteKeyRate() float64 {
 	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	var itemCount int
-	var size uint64
-	var delPercent float64
-	for i := range p.mu.stQueue {
-		itemCount += p.mu.stQueue[i].itemCount()
-		size += p.mu.stQueue[i].inuseBytes()
-		dp := p.mu.stQueue[i].delPercent()
-		if delPercent < dp {
-			delPercent = dp
-		}
-	}
-
-	return itemCount, size, len(p.mu.stQueue), delPercent
+	total, delCount, pdCount := p.mu.stMutable.getKeyStats()
+	p.mu.RUnlock()
+	return p.getDeleteKeyRate(total, delCount, pdCount)
 }
 
 func (p *page) loadReadState() (*readState, func()) {
@@ -450,33 +416,82 @@ func (p *page) setFlushState(v uint32) {
 	p.flushState.Store(v)
 }
 
-func (p *page) maybeScheduleFlush(flushSize uint64, isForce bool) bool {
-	if !p.canSendFlushTask() {
-		return false
-	}
-
-	if isForce {
-		p.setFlushState(pageFlushStateSendTask)
-		return true
-	}
-
-	itemCount, stSize, stNum, delPercent := p.inuseStState()
-	if stSize > flushSize ||
-		stNum > 1 ||
-		consts.CheckFlushDelPercent(delPercent, stSize, flushSize) ||
-		consts.CheckFlushItemCount(itemCount, stSize, flushSize) {
-		p.bp.opts.Logger.Infof("[BITPAGE %d] push flush task pn:%s flushSize:%d stSize:%d stNum:%d delPercent:%.2f itemCount:%d",
-			p.bp.index, p.pn, flushSize, stSize, stNum, delPercent, itemCount)
-		p.setFlushState(pageFlushStateSendTask)
-		return true
-	}
-
-	return false
-}
-
 func (p *page) memFlushFinish() error {
 	p.mu.RLock()
 	st := p.mu.stMutable
 	p.mu.RUnlock()
 	return st.mergeIndexes()
+}
+
+func (p *page) maybeScheduleFlush(flushSize uint64, isForce bool) bool {
+	if !p.canSendFlushTask() {
+		return false
+	}
+
+	var (
+		stNum         int
+		mtKeyNum      int
+		mtSize        uint64
+		mtKeyTotal    int
+		mtDelKeyCount int
+		mtPdKeyCount  int
+		mtModTime     int64
+		mtDelKeyRate  float64
+		isFlush       bool
+	)
+
+	if isForce {
+		p.setFlushState(pageFlushStateSendTask)
+		p.bp.opts.Logger.Infof("[BITPAGE %d] need flush by force pn:%s", p.bp.index, p.pn)
+		return true
+	}
+
+	p.mu.RLock()
+	stNum = len(p.mu.stQueue)
+	if stNum == 1 {
+		mtKeyNum = p.mu.stMutable.itemCount()
+		mtSize = p.mu.stMutable.inuseBytes()
+		mtModTime = p.mu.stMutable.getModTime()
+		mtKeyTotal, mtDelKeyCount, mtPdKeyCount = p.mu.stMutable.getKeyStats()
+	}
+	p.mu.RUnlock()
+
+	if stNum > 1 {
+		isFlush = true
+		p.bp.opts.Logger.Infof("[BITPAGE %d] pn:%s need flush by stNum:%d", p.bp.index, p.pn, stNum)
+	} else if mtSize > flushSize {
+		isFlush = true
+		p.bp.opts.Logger.Infof("[BITPAGE %d] pn:%s need flush by size:%d|%d", p.bp.index, p.pn, mtSize, flushSize)
+	} else if consts.CheckFlushItemCount(mtKeyNum, mtSize, flushSize) {
+		isFlush = true
+		p.bp.opts.Logger.Infof("[BITPAGE %d] pn:%s need flush by mtKeyNum:%d size:%d|%d", p.bp.index, p.pn, mtKeyNum, mtSize, flushSize)
+	} else {
+		mtDelKeyRate = p.getDeleteKeyRate(mtKeyTotal, mtDelKeyCount, mtPdKeyCount)
+		if consts.CheckFlushDelPercent(mtDelKeyRate, mtSize, flushSize) {
+			isFlush = true
+			p.bp.opts.Logger.Infof("[BITPAGE %d] pn:%s need flush by mtDelKeyRate:%.2f multiplier:%d mtStatKey:%d|%d|%d size:%d|%d",
+				p.bp.index, p.pn, mtDelKeyRate, p.bp.opts.FlushPrefixDeleteKeyMultiplier, mtKeyTotal, mtDelKeyCount, mtPdKeyCount, mtSize, flushSize)
+		} else if mtModTime > 0 {
+			mtLifeTime := int64(p.bp.opts.FlushFileLifetime*(rand.Intn(10)+10)/10) + mtModTime
+			if consts.CheckFlushLifeTime(mtLifeTime, mtSize, flushSize) {
+				isFlush = true
+				p.bp.opts.Logger.Infof("[BITPAGE %d] pn:%s need flush by mtLifeTime:%s mtModTime:%s size:%d|%d",
+					p.bp.index, p.pn, utils.FmtUnixTime(mtLifeTime), utils.FmtUnixTime(mtModTime), mtSize, flushSize)
+			}
+		}
+	}
+
+	if isFlush {
+		p.setFlushState(pageFlushStateSendTask)
+	}
+
+	return isFlush
+}
+
+func (p *page) getDeleteKeyRate(totalCount, delCount, pdCount int) float64 {
+	if totalCount == 0 {
+		return 0
+	}
+	delKeyCount := delCount + pdCount*p.bp.opts.FlushPrefixDeleteKeyMultiplier
+	return float64(delKeyCount) / float64(totalCount)
 }

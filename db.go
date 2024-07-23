@@ -56,28 +56,29 @@ type Writer interface {
 }
 
 type DB struct {
-	dirname        string
-	walDirname     string
-	opts           *Options
-	optspool       *options.OptionsPool
-	cmp            Compare
-	equal          Equal
-	split          Split
-	timeNow        func() time.Time
-	compressor     compress.Compressor
-	fileLock       io.Closer
-	dataDir        vfs.File
-	closed         atomic.Bool
-	dbState        *statemachine.DbStateMachine
-	taskWg         sync.WaitGroup
-	taskClosed     chan struct{}
-	memFlushTask   *bitask.MemFlushTask
-	bpageTask      *bitask.BitpageTask
-	bitowers       [consts.DefaultBitowerNum]*Bitower
-	cache          cache.ICache
-	meta           *metaSet
-	flushedBitable atomic.Bool
-	flushMemTime   atomic.Int64
+	dirname             string
+	walDirname          string
+	opts                *Options
+	optspool            *options.OptionsPool
+	cmp                 Compare
+	equal               Equal
+	split               Split
+	largeBatchThreshold int
+	timeNow             func() time.Time
+	compressor          compress.Compressor
+	fileLock            io.Closer
+	dataDir             vfs.File
+	closed              atomic.Bool
+	dbState             *statemachine.DbStateMachine
+	taskWg              sync.WaitGroup
+	taskClosed          chan struct{}
+	memFlushTask        *bitask.MemFlushTask
+	bpageTask           *bitask.BitpageTask
+	bitowers            [consts.DefaultBitowerNum]*Bitower
+	cache               cache.ICache
+	meta                *metaSet
+	flushedBitable      atomic.Bool
+	flushMemTime        atomic.Int64
 }
 
 var _ Reader = (*DB)(nil)
@@ -206,10 +207,14 @@ func (d *DB) ApplyBitower(batch *BatchBitower, opts *WriteOptions) error {
 	if batch.db == nil {
 		batch.refreshMemTableSize()
 	}
-
-	index := batch.index
-	if err := d.bitowers[index].commit.Commit(batch, isSync); err != nil {
-		return errors.Errorf("batch apply commit fail index:%d err:%s", index, err)
+	if int(batch.memTableSize) >= d.largeBatchThreshold {
+		batch.flushable = newFlushableBatchBitower(batch, d.opts.Comparer)
+	}
+	if err := d.bitowers[batch.index].commit.Commit(batch, isSync); err != nil {
+		return errors.Errorf("batch apply commit fail index:%d err:%s", batch.index, err)
+	}
+	if batch.flushable != nil {
+		batch.data = nil
 	}
 
 	return nil
@@ -229,17 +234,22 @@ func (d *DB) Apply(batch *Batch, opts *WriteOptions) error {
 		return errors.Errorf("batch db mismatch: %p != %p", batch.db, d)
 	}
 
-	for i, tower := range batch.bitowers {
-		if tower == nil || atomic.LoadUint32(&tower.applied) != 0 {
+	for i, towerBatch := range batch.bitowers {
+		if towerBatch == nil || atomic.LoadUint32(&towerBatch.applied) != 0 {
 			continue
 		}
 
-		if tower.db == nil {
-			tower.refreshMemTableSize()
+		if towerBatch.db == nil {
+			towerBatch.refreshMemTableSize()
 		}
-
-		if err := d.bitowers[i].commit.Commit(tower, isSync); err != nil {
+		if int(towerBatch.memTableSize) >= d.largeBatchThreshold {
+			towerBatch.flushable = newFlushableBatchBitower(towerBatch, d.opts.Comparer)
+		}
+		if err := d.bitowers[i].commit.Commit(towerBatch, isSync); err != nil {
 			return errors.Errorf("batch apply commit fail index:%d err:%s", i, err)
+		}
+		if towerBatch.flushable != nil {
+			towerBatch.data = nil
 		}
 	}
 

@@ -407,6 +407,20 @@ func TestBatchBitowerMemTableSizeOverflow(t *testing.T) {
 	require.NoError(t, db.Close())
 }
 
+func TestFlushableBatchBitowerReset(t *testing.T) {
+	var b BatchBitower
+	b.flushable = newFlushableBatchBitower(&b, DefaultComparer)
+
+	b.Reset()
+	require.Nil(t, b.flushable)
+}
+
+func TestEmptyFlushableBatchBitower(t *testing.T) {
+	fb := newFlushableBatchBitower(newBatchBitower(nil), DefaultComparer)
+	it := newInternalIterAdapter(fb.newIter(nil))
+	require.False(t, it.First())
+}
+
 func BenchmarkBatchBitowerSet(b *testing.B) {
 	value := make([]byte, 10)
 	for i := range value {

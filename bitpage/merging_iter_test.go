@@ -57,7 +57,7 @@ func TestSkl_Arrat_Merging(t *testing.T) {
 		}
 
 		for i := 0; i < len(cases); i++ {
-			ikey = makeInternalKey(makeTestKey(cases[i].key), cases[i].seq, cases[i].kind)
+			ikey = base.MakeInternalKey(makeTestKey(cases[i].key), cases[i].seq, cases[i].kind)
 			if cases[i].kind == internalKeyKindSet {
 				if err := wr.Set(ikey, addval); err != nil {
 					t.Fatal("set fail", ikey.String(), err)

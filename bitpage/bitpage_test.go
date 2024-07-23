@@ -174,6 +174,95 @@ func TestBitpage_Writer(t *testing.T) {
 	testCloseBitpage(t, bp)
 }
 
+func TestBitpage_WriterStat(t *testing.T) {
+	defer os.RemoveAll(testDir)
+	os.RemoveAll(testDir)
+
+	bp, err := testOpenBitpage(true)
+	require.NoError(t, err)
+
+	pn, err1 := bp.NewPage()
+	require.NoError(t, err1)
+
+	count := 1000
+	seqNum := uint64(1)
+	kvList := testMakeSortedKV(count, seqNum, 10)
+	seqNum += uint64(count)
+
+	wr := bp.GetPageWriter(pn, nil)
+	writeKV := func(pos int) {
+		require.NoError(t, wr.Set(*kvList[pos].Key, kvList[pos].Value))
+	}
+
+	var delKeyNum, pdKeyNum int
+
+	for i := 0; i < count; i++ {
+		if i%3 == 0 {
+			kvList[i].Key.SetKind(internalKeyKindSet)
+		} else if i%4 == 0 {
+			kvList[i].Key.SetKind(internalKeyKindDelete)
+			delKeyNum++
+		} else if i%5 == 0 {
+			kvList[i].Key.SetKind(internalKeyKindPrefixDelete)
+			pdKeyNum++
+		}
+		writeKV(i)
+	}
+	require.NoError(t, wr.FlushFinish())
+
+	p := bp.GetPage(pn)
+	totalCount, delCount, prefixDelCount := p.mu.stMutable.getKeyStats()
+	deleteRate := p.getDeleteKeyRate(totalCount, delCount, prefixDelCount)
+	require.Equal(t, count, totalCount)
+	require.Equal(t, delKeyNum, delCount)
+	require.Equal(t, pdKeyNum, prefixDelCount)
+	require.Equal(t, 1.166, deleteRate)
+
+	testCloseBitpage(t, bp)
+}
+
+func TestBitpage_StModTime(t *testing.T) {
+	defer os.RemoveAll(testDir)
+	os.RemoveAll(testDir)
+
+	bp, err := testOpenBitpage(true)
+	require.NoError(t, err)
+
+	pn, err1 := bp.NewPage()
+	require.NoError(t, err1)
+
+	count := 1000
+	seqNum := uint64(1)
+	kvList := testMakeSortedKV(count, seqNum, 10)
+	seqNum += uint64(count)
+
+	wr := bp.GetPageWriter(pn, nil)
+	writeKV := func(pos int) {
+		require.NoError(t, wr.Set(*kvList[pos].Key, kvList[pos].Value))
+	}
+
+	for i := 0; i < count; i++ {
+		kvList[i].Key.SetKind(internalKeyKindSet)
+		writeKV(i)
+	}
+	require.NoError(t, wr.FlushFinish())
+
+	p := bp.GetPage(pn)
+	require.Equal(t, p.mu.stQueue[len(p.mu.stQueue)-1].getModTime(), p.mu.stMutable.getModTime())
+	testCloseBitpage(t, bp)
+
+	bp, err = testOpenBitpage(true)
+	require.NoError(t, err)
+	p = bp.GetPage(pn)
+	require.Equal(t, p.mu.stQueue[len(p.mu.stQueue)-1].getModTime(), p.mu.stMutable.getModTime())
+	testCloseBitpage(t, bp)
+
+	require.Equal(t, false, consts.CheckFlushLifeTime(0, 0, 0))
+	require.Equal(t, false, consts.CheckFlushLifeTime(time.Now().Unix(), 0, 0))
+	require.Equal(t, true, consts.CheckFlushLifeTime(time.Now().Unix()-6*86400, 3, 10))
+	require.Equal(t, false, consts.CheckFlushLifeTime(time.Now().Unix()-6*86400, 1, 10))
+}
+
 func TestBitpage_StMmapExpand(t *testing.T) {
 	defer os.RemoveAll(testDir)
 	os.RemoveAll(testDir)

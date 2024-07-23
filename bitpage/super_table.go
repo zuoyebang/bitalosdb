@@ -58,18 +58,19 @@ const (
 type stIndexes []uint32
 
 type superTable struct {
-	p             *page
-	tbl           *table
-	writer        *tableWriter
-	version       uint16
-	fn            FileNum
-	totalCount    float64
-	delCount      float64
-	filename      string
-	idxPath       string
-	indexModified bool
-	reading       atomic.Pointer[stIndexes]
-	pending       stIndexes
+	p              *page
+	tbl            *table
+	writer         *tableWriter
+	version        uint16
+	fn             FileNum
+	totalCount     int
+	delCount       int
+	prefixDelCount int
+	filename       string
+	idxPath        string
+	indexModified  bool
+	reading        atomic.Pointer[stIndexes]
+	pending        stIndexes
 }
 
 func checkSuperTable(obj interface{}) {
@@ -234,20 +235,24 @@ func (s *superTable) newIter(o *iterOptions) internalIterator {
 
 func (s *superTable) kindStatis(kind internalKeyKind) {
 	s.totalCount++
-	if kind == internalKeyKindDelete {
+	switch kind {
+	case internalKeyKindDelete:
 		s.delCount++
+	case internalKeyKindPrefixDelete:
+		s.prefixDelCount++
 	}
 }
 
-func (s *superTable) delPercent() float64 {
-	if s.delCount == 0 {
-		return 0
-	}
-	return s.delCount / s.totalCount
+func (s *superTable) getKeyStats() (int, int, int) {
+	return s.totalCount, s.delCount, s.prefixDelCount
 }
 
 func (s *superTable) itemCount() int {
 	return len(s.readIndexes())
+}
+
+func (s *superTable) getModTime() int64 {
+	return s.tbl.modTime
 }
 
 func (s *superTable) readyForFlush() bool {

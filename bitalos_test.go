@@ -488,6 +488,43 @@ func TestBatchSetMulti(t *testing.T) {
 	}
 }
 
+func TestLargeBatch(t *testing.T) {
+	defer os.RemoveAll(testDirname)
+	os.RemoveAll(testDirname)
+
+	db := openTestDB(testDirname, nil)
+	defer func() {
+		require.NoError(t, db.Close())
+	}()
+
+	num := 100
+	kvList := make(map[string][]byte, num)
+	for i := 0; i < 20; i++ {
+		b := db.NewBatchBitower()
+		key := makeTestSlotIntKey(i)
+		val := testRandBytes(100)
+		_ = b.Set(key, val, NoSync)
+		kvList[unsafe2.String(key)] = val
+		require.NoError(t, b.Commit(NoSync))
+		require.NoError(t, b.Close())
+	}
+
+	b := db.NewBatchBitower()
+	for i := 20; i < num; i++ {
+		key := makeTestSlotIntKey(i)
+		val := testRandBytes(1 << 20)
+		_ = b.Set(key, val, NoSync)
+		kvList[unsafe2.String(key)] = val
+	}
+	require.NoError(t, b.Commit(NoSync))
+	require.NoError(t, b.Close())
+
+	for i := 0; i < 100; i++ {
+		key := makeTestSlotIntKey(i)
+		require.NoError(t, verifyGet(db, key, kvList[string(key)]))
+	}
+}
+
 func TestBithashWriteRead(t *testing.T) {
 	defer os.RemoveAll(testDirname)
 	os.RemoveAll(testDirname)
