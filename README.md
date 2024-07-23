@@ -34,6 +34,13 @@ Memory: 384GB
 Disk:   2*3.5TB NVMe SSD
 ```
 
+- IOPS&BW (File)
+
+|BlockSize| Write | RandWrite | Read | RandRead 
+|---------|----------|----------|------|-----
+| 4KB  | 294K(1150MiB/s)  | 232K(905MiB/s) | 446K(1742MiB/s) | 446K(1743MiB/s) 
+| 8KB | 266K(2080MiB/s) | 244K(1902MiB/s) | 309K(2414MiB/s) | 404K(3159MiB/s)
+
 ### Program
 
 - Benchmark thread number: 8
