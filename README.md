@@ -31,10 +31,10 @@
 ```
 CPU:    Intel(R) Xeon(R) Platinum 8255C CPU @ 2.50GHz
 Memory: 384GB
-Disk:   2*3.5TB NVMe SSD
+Disk:   2*3.5TB SSD
 ```
 
-- IOPS&BW (File)
+- Disk(File) IOPS(BW)
 
 |BlockSize| Write | RandWrite | Read | RandRead 
 |---------|----------|----------|------|-----
