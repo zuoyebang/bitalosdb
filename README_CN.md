@@ -10,7 +10,7 @@
 
 - 作者：徐锐波(hustxurb@163.com)
 
-- 贡献者：幸福(wzxingfu@gmail.com)、卢文伟(422213023@qq.com)、刘方(killcode13@sina.com)
+- 贡献者：幸福(wzxingfu@gmail.com)、李景晨(cokin.lee@outlook.com)、卢文伟(422213023@qq.com)、刘方(killcode13@sina.com)
 
 ## 关键技术
 - Bithash（KV分离技术），显著改善写放大；具备O(1)检索效率，可独立完成GC，实现value与index解耦。

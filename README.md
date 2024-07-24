@@ -12,7 +12,7 @@
 
 - Author: Xu Ruibo(hustxurb@163.com)
 
-- Contributors: Xing Fu(wzxingfu@gmail.com), Lu Wenwei(422213023@qq.com), Liu Fang(killcode13@sina.com)
+- Contributors: Xing Fu(wzxingfu@gmail.com), Li Jingchen(cokin.lee@outlook.com), Lu Wenwei(422213023@qq.com), Liu Fang(killcode13@sina.com)
 
 ## Key Technology
 
