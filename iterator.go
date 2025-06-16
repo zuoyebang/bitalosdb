@@ -19,11 +19,9 @@ import (
 	"unsafe"
 
 	"github.com/zuoyebang/bitalosdb/internal/consts"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/zuoyebang/bitalosdb/internal/invariants"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
-
-	"github.com/cockroachdb/errors"
-	"github.com/cockroachdb/redact"
 )
 
 type iterPos int8
@@ -61,8 +59,6 @@ type IteratorStats struct {
 	ForwardStepCount [NumStatsKind]int
 	ReverseStepCount [NumStatsKind]int
 }
-
-var _ redact.SafeFormatter = &IteratorStats{}
 
 type Iterator struct {
 	opts                IterOptions
@@ -131,9 +127,9 @@ func (i *Iterator) findNextEntry() {
 			i.iterValidityState = IterValid
 			return
 		default:
-			i.err = errors.Errorf("bitalosdb: invalid internal key kind %d", key.Kind())
-			i.iterValidityState = IterExhausted
-			return
+			i.err = errors.Errorf("bitalosdb: Iterator findNextEntry invalid internal key kind %d", key.Kind())
+			i.nextUserKey()
+			continue
 		}
 	}
 }
@@ -607,22 +603,4 @@ func (i *Iterator) getInternalSeekCount() int {
 
 func (i *Iterator) getInterfaceSeekCount() int {
 	return i.stats.ForwardSeekCount[0] + i.stats.ForwardSeekCount[0]
-}
-
-func (stats *IteratorStats) String() string {
-	return redact.StringWithoutMarkers(stats)
-}
-
-func (stats *IteratorStats) SafeFormat(s redact.SafePrinter, verb rune) {
-	for i := range stats.ForwardStepCount {
-		switch IteratorStatsKind(i) {
-		case InterfaceCall:
-			s.SafeString("(interface (dir, seek, step): ")
-		case InternalIterCall:
-			s.SafeString(", (internal (dir, seek, step): ")
-		}
-		s.Printf("(fwd, %d, %d), (rev, %d, %d))",
-			stats.ForwardSeekCount[i], stats.ForwardStepCount[i],
-			stats.ReverseSeekCount[i], stats.ReverseStepCount[i])
-	}
 }

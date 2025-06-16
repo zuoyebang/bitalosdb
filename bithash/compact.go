@@ -23,8 +23,8 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/cockroachdb/errors/oserror"
 	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/os2"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 )
 
@@ -75,11 +75,14 @@ func (b *Bithash) CheckFilesDelPercent(cfgPercent float64) []CompactFiles {
 
 		delPercent := float64(fileMeta.delKeyNum) / float64(fileMeta.keyNum)
 		if delPercent >= cfgPercent {
-			b.logger.Infof("[COMPACTBITHASH %d] checkFilesDelPercent %s delPercent:%.4f cfgPercent:%.2f", b.index, fileMeta, delPercent, cfgPercent)
+			fileSize := b.fileSize(fn)
 			compactFiles = append(compactFiles, CompactFiles{
 				FileNum:    fn,
 				DelPercent: delPercent,
+				Size:       b.fileSize(fn),
 			})
+			b.logger.Infof("[COMPACTBITHASH %d] checkFilesDelPercent %s delPercent:%.4f cfgPercent:%.2f fileSize:%s",
+				b.index, fileMeta, delPercent, cfgPercent, utils.FmtSize(fileSize))
 			findNum++
 			if findNum >= compactMaxFileNum {
 				break
@@ -103,7 +106,7 @@ func (b *Bithash) CheckFilesMiniSize() []CompactFiles {
 
 		fileSize := b.fileSize(fn)
 		if fileSize <= compactMaxMiniSize {
-			b.logger.Infof("[COMPACTBITHASH %d] checkFilesMiniSize %s fileSize:%s", b.index, fileMeta, utils.FmtSize(uint64(fileSize)))
+			b.logger.Infof("[COMPACTBITHASH %d] checkFilesMiniSize %s fileSize:%s", b.index, fileMeta, utils.FmtSize(fileSize))
 			compactFiles = append(compactFiles, CompactFiles{
 				FileNum: fn,
 				Size:    fileSize,
@@ -267,10 +270,9 @@ func (w *compactLogWriter) close() (err error) {
 	return
 }
 
-func initFileNumMap(b *Bithash) error {
+func initFileNumMap(b *Bithash) (err error) {
 	filename := MakeFilepath(b.fs, b.dirname, fileTypeFileNumMap, 0)
-	_, err := b.fs.Stat(filename)
-	if oserror.IsNotExist(err) {
+	if os2.IsNotExist(filename) {
 		if err = createFileNumMapFile(b, filename); err != nil {
 			return err
 		}

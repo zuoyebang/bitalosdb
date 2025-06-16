@@ -44,7 +44,7 @@ func (w *flushBitowerWriter) Set(key base.InternalKey, val []byte) error {
 		}
 	}
 
-	if err := w.writer.Apply(key.Clone(), val); err != nil {
+	if err := w.writer.Apply(key, val); err != nil {
 		w.err = err
 		return err
 	}
@@ -101,7 +101,7 @@ func (d *DB) newFlushWriter() (*flushWriter, error) {
 }
 
 func (d *DB) doMemFlushTask(task *bitask.MemFlushTaskData) {
-	d.bitowers[task.Index].flush(task.NeedReport)
+	d.bitowers[task.Index].flush(task.NeedReport, true)
 }
 
 func (d *DB) doBitpageTask(task *bitask.BitpageTaskData) {

@@ -17,8 +17,8 @@ package bitalosdb
 import (
 	"os"
 
-	"github.com/cockroachdb/errors/oserror"
 	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/os2"
 	"github.com/zuoyebang/bitalosdb/internal/vfs"
 )
 
@@ -43,13 +43,9 @@ func mkdirAllAndSyncParents(fs vfs.FS, destDir string) (vfs.File, error) {
 	foundExistingAncestor := false
 	for parentPath := fs.PathDir(destDir); parentPath != "."; parentPath = fs.PathDir(parentPath) {
 		parentPaths = append(parentPaths, parentPath)
-		_, err := fs.Stat(parentPath)
-		if err == nil {
+		if os2.IsExist(parentPath) {
 			foundExistingAncestor = true
 			break
-		}
-		if !oserror.IsNotExist(err) {
-			return nil, err
 		}
 	}
 
@@ -84,15 +80,8 @@ func (d *DB) Checkpoint(destDir string, opts ...CheckpointOption) (ckErr error) 
 		fn(opt)
 	}
 
-	if _, err := d.opts.FS.Stat(destDir); !oserror.IsNotExist(err) {
-		if err == nil {
-			return &os.PathError{
-				Op:   "checkpoint",
-				Path: destDir,
-				Err:  oserror.ErrExist,
-			}
-		}
-		return err
+	if os2.IsExist(destDir) {
+		return os.ErrExist
 	}
 
 	isSync := opt.flushWAL && !d.opts.DisableWAL

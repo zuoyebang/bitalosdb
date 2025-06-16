@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/cockroachdb/errors"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 )
 
 const (
@@ -202,7 +202,7 @@ func (b *Bucket) DeleteBucket(key []byte) error {
 	err := child.ForEach(func(k, v []byte) error {
 		if _, _, childFlags := child.Cursor().seek(k); (childFlags & bucketLeafFlag) != 0 {
 			if err := child.DeleteBucket(k); err != nil {
-				return errors.Wrap(err, "delete bucket err")
+				return errors.Wrapf(err, "delete bucket err")
 			}
 		}
 		return nil

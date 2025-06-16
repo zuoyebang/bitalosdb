@@ -20,10 +20,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"github.com/zuoyebang/bitalosdb/internal/bitask"
-
 	"github.com/zuoyebang/bitalosdb/internal/consts"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/zuoyebang/bitalosdb/internal/humanize"
 )
 
@@ -46,11 +45,8 @@ func (p *page) flush(sentinel []byte, logTag string) (err error) {
 	var oldSize uint64
 
 	prepareFlushing := func() error {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-
 		if err := p.makeMutableForWrite(false); err != nil {
-			return errors.Wrap(err, "bitpage: makeMutableForWrite fail")
+			return errors.Wrapf(err, "bitpage: makeMutableForWrite fail")
 		}
 
 		n = len(p.mu.stQueue) - 1
@@ -89,7 +85,6 @@ func (p *page) flush(sentinel []byte, logTag string) (err error) {
 		return errors.Wrapf(err, "bitpage: %s flush fail", logTag)
 	}
 
-	p.mu.Lock()
 	p.bp.meta.setMinUnflushedStFileNum(p.pn, minUnflushedStFileNum)
 	p.mu.stQueue = p.mu.stQueue[n:]
 	p.mu.arrtable = atEntry
@@ -98,7 +93,6 @@ func (p *page) flush(sentinel []byte, logTag string) (err error) {
 		flushing[i].setObsolete()
 		flushing[i].readerUnref()
 	}
-	p.mu.Unlock()
 
 	p.setFlushState(pageFlushStateFinish)
 
@@ -252,10 +246,8 @@ func (p *page) split(logTag string, pages []*page) (retErr error) {
 	var flushing flushableList
 	var oldSize uint64
 
-	p.mu.Lock()
 	flushing = append(flushing, p.mu.stQueue...)
 	flushing = append(flushing, p.mu.arrtable)
-	p.mu.Unlock()
 
 	its := make([]internalIterator, 0, len(flushing))
 	for i := range flushing {

@@ -37,6 +37,7 @@ type MemFlushTaskOptions struct {
 type MemFlushTask struct {
 	taskWg     *sync.WaitGroup
 	recvCh     chan *MemFlushTaskData
+	taskCount  uint64
 	closed     atomic.Bool
 	logger     base.Logger
 	doTaskFunc func(*MemFlushTaskData)
@@ -92,6 +93,10 @@ func (t *MemFlushTask) isClosed() bool {
 	return t.closed.Load() == true
 }
 
+func (t *MemFlushTask) Count() uint64 {
+	return t.taskCount
+}
+
 func (t *MemFlushTask) Close() {
 	t.closed.Store(true)
 	t.recvCh <- nil
@@ -99,6 +104,7 @@ func (t *MemFlushTask) Close() {
 
 func (t *MemFlushTask) PushTask(task *MemFlushTaskData) {
 	if !t.isClosed() {
+		t.taskCount++
 		t.recvCh <- task
 		return
 	}

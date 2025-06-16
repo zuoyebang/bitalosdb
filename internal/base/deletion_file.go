@@ -44,7 +44,7 @@ type DeletionFileLimiter struct {
 
 func NewDeletionFileLimiter(opts *DFLOption) *DeletionFileLimiter {
 	l := &DeletionFileLimiter{
-		recvCh: make(chan []string, 1024),
+		recvCh: make(chan []string, 2048),
 		exitCh: make(chan struct{}),
 		opts:   opts,
 	}

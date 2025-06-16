@@ -17,8 +17,8 @@ package bitpage
 import (
 	"sync"
 
-	"github.com/cockroachdb/errors"
 	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 )
 
@@ -114,9 +114,9 @@ func (i *PageIterator) findNextEntry() {
 			return
 
 		default:
-			i.err = errors.Errorf("bitpage: invalid internal key kind %s", key.Kind())
-			i.iterValidityState = IterExhausted
-			return
+			i.opts.Logger.Errorf("bitpage: PageIterator findNextEntry invalid internal key kind %d", key.Kind())
+			i.nextUserKey()
+			continue
 		}
 	}
 }

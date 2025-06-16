@@ -20,7 +20,7 @@ import (
 	"sort"
 	"unsafe"
 
-	"github.com/cockroachdb/errors"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 )
 
 const pageHeaderSize = unsafe.Sizeof(page{})

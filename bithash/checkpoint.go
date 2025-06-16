@@ -18,13 +18,13 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/cockroachdb/errors"
-	"github.com/cockroachdb/errors/oserror"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
+	"github.com/zuoyebang/bitalosdb/internal/os2"
 	"github.com/zuoyebang/bitalosdb/internal/vfs"
 )
 
 func (b *Bithash) Checkpoint(fs vfs.FS, destDir string) (err error) {
-	if _, err = os.Stat(destDir); !oserror.IsNotExist(err) {
+	if !os2.IsNotExist(destDir) {
 		return errors.Errorf("bithash: checkpoint dir exist %s", destDir)
 	}
 

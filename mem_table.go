@@ -20,11 +20,10 @@ import (
 	"os"
 	"sync/atomic"
 
-	"github.com/cockroachdb/errors"
-
 	"github.com/zuoyebang/bitalosdb/internal/arenaskl"
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 )
 
 func memTableEntrySize(keyBytes, valueBytes int) uint64 {

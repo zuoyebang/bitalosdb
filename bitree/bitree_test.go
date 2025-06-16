@@ -16,6 +16,7 @@ package bitree
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"sync"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/zuoyebang/bitalosdb/bitable"
+	"github.com/zuoyebang/bitalosdb/bithash"
 	"github.com/zuoyebang/bitalosdb/bitpage"
 	"github.com/zuoyebang/bitalosdb/bitree/bdb"
 	"github.com/zuoyebang/bitalosdb/internal/base"
@@ -626,6 +628,76 @@ func TestBitree_IterCache(t *testing.T) {
 
 	require.Equal(t, keyCount, rangeLoop(nil))
 	fmt.Println("start range use cache", btree.bpage.GetCacheMetrics())
+
+	require.NoError(t, testBitreeClose(btree))
+}
+
+func TestBitree_IterBithash(t *testing.T) {
+	defer os.RemoveAll(testDir)
+	os.RemoveAll(testDir)
+
+	testBithashSize = 10 << 10
+	btree, _ := testOpenBitree()
+	require.NoError(t, testNewBitreePages(btree))
+
+	value := utils.FuncRandBytes(consts.KvSeparateSize + 200)
+	keyCount := 100
+	seqNum := uint64(0)
+	kvList := testMakeSortedKV(keyCount, seqNum, 1)
+	seqNum += uint64(keyCount)
+
+	bw, err := btree.NewBitreeWriter()
+	require.NoError(t, err)
+	for i := 0; i < keyCount; i++ {
+		kvList[i].Value = value
+		kvList[i].Key.SetSeqNum(seqNum)
+		seqNum++
+		require.NoError(t, bw.Apply(*kvList[i].Key, kvList[i].Value))
+	}
+	require.NoError(t, bw.Finish())
+	time.Sleep(2 * time.Second)
+
+	iter := btree.newBitreeIter(nil)
+	i := 0
+	for ik, _ := iter.First(); ik != nil; ik, _ = iter.Next() {
+		require.Equal(t, kvList[i].Key.UserKey, ik.UserKey)
+		i++
+	}
+	require.NoError(t, iter.Close())
+
+	searchKey := kvList[10].Key.UserKey
+	ivalue, iexist, icloser := btree.getInternal(searchKey, hash.Crc32(searchKey))
+	require.Equal(t, true, iexist)
+	iv := base.DecodeInternalValue(ivalue)
+	searchFn := binary.LittleEndian.Uint32(iv.UserValue)
+	icloser()
+	btree.bhash.DeleteReaders(bithash.FileNum(searchFn))
+
+	iter = btree.newBitreeIter(nil)
+	i = 0
+	for ik, _ := iter.First(); ik != nil; ik, _ = iter.Next() {
+		require.Equal(t, kvList[i].Key.UserKey, ik.UserKey)
+		if i < 21 {
+			require.Equal(t, base.InternalKeyKindDelete, ik.Kind())
+		} else {
+			require.Equal(t, base.InternalKeyKindSet, ik.Kind())
+		}
+		i++
+	}
+	require.NoError(t, iter.Close())
+
+	iter = btree.newBitreeIter(nil)
+	i = keyCount - 1
+	for ik, _ := iter.Last(); ik != nil; ik, _ = iter.Prev() {
+		require.Equal(t, kvList[i].Key.UserKey, ik.UserKey)
+		if i < 21 {
+			require.Equal(t, base.InternalKeyKindDelete, ik.Kind())
+		} else {
+			require.Equal(t, base.InternalKeyKindSet, ik.Kind())
+		}
+		i--
+	}
+	require.NoError(t, iter.Close())
 
 	require.NoError(t, testBitreeClose(btree))
 }

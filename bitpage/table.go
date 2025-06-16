@@ -24,9 +24,8 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/cockroachdb/errors"
-
 	"github.com/zuoyebang/bitalosdb/internal/consts"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/zuoyebang/bitalosdb/internal/mmap"
 	"golang.org/x/sys/unix"
 )
@@ -466,6 +465,45 @@ func (w *tableWriter) set(key internalKey, value []byte) (uint32, error) {
 			return 0, err
 		}
 		wrn += n
+	}
+
+	addSize := uint32(wrn)
+	w.wbuf = w.wbuf[:0]
+	offset := w.offset.Load()
+	w.offset.Add(addSize)
+	return offset, nil
+}
+
+func (w *tableWriter) setMulti(key internalKey, values ...[]byte) (uint32, error) {
+	keySize := key.Size()
+	preSize := keySize + stItemHeaderSize
+	wrn := 0
+	if cap(w.wbuf) < preSize {
+		w.wbuf = make([]byte, 0, preSize*2)
+	}
+
+	var valueSize int
+	for i := range values {
+		valueSize += len(values[i])
+	}
+
+	w.wbuf = w.wbuf[:preSize]
+	w.encodeHeader(w.wbuf[:stItemHeaderSize], uint16(keySize), uint32(valueSize))
+	key.Encode(w.wbuf[stItemHeaderSize:])
+	n, err := w.writer.Write(w.wbuf)
+	if err != nil {
+		return 0, err
+	}
+	wrn += n
+
+	if valueSize > 0 {
+		for i := range values {
+			n, err = w.writer.Write(values[i])
+			if err != nil {
+				return 0, err
+			}
+			wrn += n
+		}
 	}
 
 	addSize := uint32(wrn)

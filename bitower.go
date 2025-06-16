@@ -22,10 +22,10 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/cockroachdb/errors"
 	"github.com/zuoyebang/bitalosdb/bitree"
 	"github.com/zuoyebang/bitalosdb/internal/arenaskl"
 	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/zuoyebang/bitalosdb/internal/hash"
 	"github.com/zuoyebang/bitalosdb/internal/invariants"
 	"github.com/zuoyebang/bitalosdb/internal/manual"
@@ -75,7 +75,7 @@ type Bitower struct {
 	}
 }
 
-func openBitower(d *DB, index int) (*Bitower, error) {
+func openBitower(d *DB, index int) error {
 	s := &Bitower{
 		db:           d,
 		index:        index,
@@ -85,11 +85,11 @@ func openBitower(d *DB, index int) (*Bitower, error) {
 
 	s.walDirname = base.MakeWalpath(d.walDirname, index)
 	if err := d.opts.FS.MkdirAll(s.walDirname, 0755); err != nil {
-		return nil, err
+		return err
 	}
 	walDir, err := d.opts.FS.OpenDir(s.walDirname)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	s.walDir = walDir
 
@@ -114,16 +114,18 @@ func openBitower(d *DB, index int) (*Bitower, error) {
 	btreeOpts.Index = s.index
 	s.btree, err = bitree.NewBitree(s.db.dirname, btreeOpts)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	var entry *flushableEntry
 	s.mu.mem.mutable, entry = s.newMemTable(0, d.meta.atomic.logSeqNum)
 	s.mu.mem.queue = append(s.mu.mem.queue, entry)
 
+	d.bitowers[index] = s
+
 	ls, err := d.opts.FS.List(s.walDirname)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	type fileNumAndName struct {
 		num  FileNum
@@ -160,7 +162,7 @@ func openBitower(d *DB, index int) (*Bitower, error) {
 		walFilename := d.opts.FS.PathJoin(s.walDirname, lf.name)
 		maxSeqNum, err = s.replayWAL(walFilename, lf.num)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		d.opts.Logger.Infof("[BITOWER %d] replayWAL ok wal:%s maxSeqNum:%d", s.index, walFilename, maxSeqNum)
 		s.mu.metaEdit.MarkFileNumUsed(lf.num)
@@ -169,21 +171,21 @@ func openBitower(d *DB, index int) (*Bitower, error) {
 		}
 	}
 
-	if !d.opts.DisableWAL {
-		newLogNum := s.mu.metaEdit.GetNextFileNum()
-		sme := &bitowerMetaEditor{MinUnflushedLogNum: newLogNum}
-		if err = s.metaApply(sme); err != nil {
-			return nil, err
-		}
+	newLogNum := s.mu.metaEdit.GetNextFileNum()
+	sme := &bitowerMetaEditor{MinUnflushedLogNum: newLogNum}
+	if err = s.metaApply(sme); err != nil {
+		return err
+	}
 
+	if !d.opts.DisableWAL {
 		newLogName := s.makeWalFilename(newLogNum)
 		s.mu.log.queue = append(s.mu.log.queue, fileInfo{fileNum: newLogNum, fileSize: 0})
 		logFile, err := d.opts.FS.Create(newLogName)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if err = s.walDir.Sync(); err != nil {
-			return nil, err
+			return err
 		}
 
 		d.opts.EventListener.WALCreated(WALCreateInfo{
@@ -203,11 +205,10 @@ func openBitower(d *DB, index int) (*Bitower, error) {
 	}
 
 	s.updateReadState()
-
 	s.scanObsoleteFiles(ls)
 	s.doDeleteObsoleteFiles()
 
-	return s, nil
+	return nil
 }
 
 func (s *Bitower) replayWAL(filename string, logNum FileNum) (maxSeqNum uint64, err error) {
@@ -261,12 +262,11 @@ func (s *Bitower) replayWAL(filename string, logNum FileNum) (maxSeqNum uint64, 
 			} else if record.IsInvalidRecord(err) {
 				break
 			}
-			return 0, errors.Wrap(err, "bitalosdb: error when replaying WAL")
+			return 0, errors.Errorf("bitalosdb: error when replaying WAL err:%s", err)
 		}
 
 		if buf.Len() < batchHeaderLen {
-			return 0, base.CorruptionErrorf("bitalosdb: corrupt log file %q (num %s)",
-				filename, errors.Safe(logNum))
+			return 0, base.CorruptionErrorf("bitalosdb: corrupt log file %q (num %d)", filename, logNum)
 		}
 
 		b = BatchBitower{
@@ -478,7 +478,7 @@ func (s *Bitower) AsyncFlush() (<-chan struct{}, error) {
 		return nil, nil
 	}
 	flushed := s.mu.mem.queue[len(s.mu.mem.queue)-1].flushed
-	err := s.makeRoomForWrite(nil, false)
+	err := s.makeRoomForWrite(nil, false, false)
 	if err != nil {
 		return nil, err
 	}
@@ -570,7 +570,7 @@ func (s *Bitower) commitApply(b *BatchBitower, mem *memTable) error {
 
 	if mem.writerUnref() {
 		s.mu.Lock()
-		s.maybeScheduleFlush(true)
+		s.maybeScheduleFlush(true, true)
 		s.mu.Unlock()
 	}
 	return nil
@@ -589,7 +589,7 @@ func (s *Bitower) commitWrite(b *BatchBitower, syncWG *sync.WaitGroup, syncErr *
 	}
 
 	s.mu.Lock()
-	err := s.makeRoomForWrite(b, true)
+	err := s.makeRoomForWrite(b, true, true)
 	mem := s.mu.mem.mutable
 	s.mu.Unlock()
 	if err != nil {
@@ -609,7 +609,7 @@ func (s *Bitower) commitWrite(b *BatchBitower, syncWG *sync.WaitGroup, syncErr *
 	return mem, err
 }
 
-func (s *Bitower) makeRoomForWrite(b *BatchBitower, needReport bool) error {
+func (s *Bitower) makeRoomForWrite(b *BatchBitower, needReport bool, isTask bool) error {
 	force := b == nil || b.flushable != nil
 	stalled := false
 	for {
@@ -758,7 +758,7 @@ func (s *Bitower) makeRoomForWrite(b *BatchBitower, needReport bool) error {
 		s.mu.mem.queue = append(s.mu.mem.queue, entry)
 		s.updateReadState()
 		if immMem.writerUnref() {
-			s.maybeScheduleFlush(needReport)
+			s.maybeScheduleFlush(needReport, isTask)
 		}
 		force = false
 	}
@@ -776,4 +776,8 @@ func (s *Bitower) newFlushWriter() (*flushBitowerWriter, error) {
 	}
 
 	return w, nil
+}
+
+func (s *Bitower) ManualFlushBitpage() {
+	s.btree.ManualFlushBitpage()
 }

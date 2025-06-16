@@ -20,7 +20,7 @@ import (
 	"os"
 	"syscall"
 
-	"github.com/cockroachdb/errors"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 )
 
 type windowsDir struct {

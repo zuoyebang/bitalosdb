@@ -15,6 +15,7 @@
 package bitpage
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os"
 	"testing"
@@ -31,12 +32,6 @@ func TestSkl_Arrat_Merging(t *testing.T) {
 	var ikey internalKey
 
 	valbuf := []byte("val4")
-	addval, closer := base.EncodeInternalValue(valbuf, 1, internalKeyKindSetBithash)
-	defer func() {
-		if closer != nil {
-			closer()
-		}
-	}()
 
 	type wtest struct {
 		key  int
@@ -59,7 +54,9 @@ func TestSkl_Arrat_Merging(t *testing.T) {
 		for i := 0; i < len(cases); i++ {
 			ikey = base.MakeInternalKey(makeTestKey(cases[i].key), cases[i].seq, cases[i].kind)
 			if cases[i].kind == internalKeyKindSet {
-				if err := wr.Set(ikey, addval); err != nil {
+				var ev [8]byte
+				binary.LittleEndian.PutUint64(ev[:], (1<<8)|uint64(internalKeyKindSetBithash))
+				if err := wr.SetMultiValue(ikey, ev[:], valbuf); err != nil {
 					t.Fatal("set fail", ikey.String(), err)
 				}
 			} else {
@@ -77,7 +74,10 @@ func TestSkl_Arrat_Merging(t *testing.T) {
 			v, vexist, vcloser, _ := pg.get(key, hash.Crc32(key))
 			if cases[i].exist {
 				require.Equal(t, true, vexist)
-				require.Equal(t, addval, v)
+				iv := base.DecodeInternalValue(v)
+				require.Equal(t, valbuf, iv.UserValue)
+				require.Equal(t, internalKeyKindSetBithash, iv.Kind())
+				require.Equal(t, uint64(1), iv.SeqNum())
 			} else {
 				require.Equal(t, false, vexist)
 			}

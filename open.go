@@ -129,7 +129,7 @@ func Open(dirname string, opts *Options) (db *DB, err error) {
 	})
 
 	d.bpageTask = bitask.NewBitpageTask(&bitask.BitpageTaskOptions{
-		Size:    consts.DefaultBitowerNum * 100,
+		Size:    consts.DefaultBitowerNum * 1000,
 		DbState: d.optspool.DbState,
 		Logger:  opts.Logger,
 		DoFunc:  d.doBitpageTask,
@@ -138,8 +138,7 @@ func Open(dirname string, opts *Options) (db *DB, err error) {
 	d.optspool.BaseOptions.BitpageTaskPushFunc = d.bpageTask.PushTask
 
 	for i := range d.bitowers {
-		d.bitowers[i], err = openBitower(d, i)
-		if err != nil {
+		if err = openBitower(d, i); err != nil {
 			return nil, err
 		}
 	}

@@ -24,7 +24,7 @@ import (
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/fastrand"
 
-	"github.com/cockroachdb/errors"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 )
 
 const (
