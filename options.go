@@ -89,6 +89,8 @@ type Options struct {
 	KeyPrefixDeleteFunc            func([]byte) uint64
 	FlushPrefixDeleteKeyMultiplier int
 	FlushFileLifetime              int
+	BitpageFlushSize               uint64
+	BitpageSplitSize               uint64
 
 	private struct {
 		logInit  bool
@@ -116,6 +118,8 @@ func (o *Options) ensureOptionsPool(optspool *options.OptionsPool) *options.Opti
 	optspool.BaseOptions.FlushPrefixDeleteKeyMultiplier = o.FlushPrefixDeleteKeyMultiplier
 	optspool.BaseOptions.FlushFileLifetime = o.FlushFileLifetime
 	optspool.BaseOptions.BitpageBlockCacheSize = consts.BitpageDefaultBlockCacheSize
+	optspool.BaseOptions.BitpageFlushSize = o.BitpageFlushSize
+	optspool.BaseOptions.BitpageSplitSize = o.BitpageSplitSize
 	if o.UseBlockCompress && o.BlockCacheSize > 0 {
 		bitpageBlockCacheSize := o.BlockCacheSize / int64(consts.DefaultBitowerNum)
 		if bitpageBlockCacheSize > consts.BitpageDefaultBlockCacheSize {
@@ -233,6 +237,18 @@ func (o *Options) EnsureDefaults() *Options {
 	}
 	if o.KeyHashFunc == nil {
 		o.KeyHashFunc = options.DefaultKeyHashFunc
+	}
+	if o.FlushPrefixDeleteKeyMultiplier == 0 {
+		o.FlushPrefixDeleteKeyMultiplier = consts.DefaultFlushPrefixDeleteKeyMultiplier
+	}
+	if o.FlushFileLifetime == 0 {
+		o.FlushFileLifetime = consts.DefaultFlushFileLifetime
+	}
+	if o.BitpageFlushSize == 0 {
+		o.BitpageFlushSize = consts.BitpageDefaultFlushSize
+	}
+	if o.BitpageSplitSize == 0 {
+		o.BitpageSplitSize = consts.BitpageDefaultSplitSize
 	}
 
 	return o

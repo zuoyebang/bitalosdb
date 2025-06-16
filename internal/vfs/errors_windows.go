@@ -17,7 +17,7 @@
 package vfs
 
 import (
-	"github.com/cockroachdb/errors"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"golang.org/x/sys/windows"
 )
 

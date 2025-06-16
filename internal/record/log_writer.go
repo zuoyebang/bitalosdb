@@ -26,7 +26,7 @@ import (
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/crc"
 
-	"github.com/cockroachdb/errors"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 )
 
 var walSyncLabels = pprof.Labels("bitalosdb", "wal-sync")
@@ -149,7 +149,7 @@ func (q *syncQueue) pop(head, tail uint32, err error) error {
 		slot := &q.slots[tail&uint32(len(q.slots)-1)]
 		wg := slot.wg
 		if wg == nil {
-			return errors.Errorf("nil waiter at %d", errors.Safe(tail&uint32(len(q.slots)-1)))
+			return errors.Errorf("nil waiter at %v", tail&uint32(len(q.slots)-1))
 		}
 		*slot.err = err
 		slot.wg = nil
@@ -468,7 +468,7 @@ func (w *LogWriter) flushPending(
 		// the stack that created the panic if panic'ing itself hits a panic
 		// (e.g. unlock of unlocked mutex).
 		if r := recover(); r != nil {
-			err = errors.Newf("%v", r)
+			err = errors.Errorf("%v", r)
 		}
 	}()
 

@@ -25,12 +25,11 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/cockroachdb/errors"
-	"github.com/zuoyebang/bitalosdb/internal/bitask"
-	"github.com/zuoyebang/bitalosdb/internal/options"
-
 	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/bitask"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
+	"github.com/zuoyebang/bitalosdb/internal/options"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 )
 
@@ -276,7 +275,7 @@ func (db *DB) mmap(minsz int) error {
 
 	info, err := db.file.Stat()
 	if err != nil {
-		return errors.Wrap(err, "mmap stat err")
+		return errors.Wrapf(err, "mmap stat err")
 	} else if int(info.Size()) < db.pageSize*2 {
 		return errors.New("file size too small")
 	}
@@ -329,7 +328,7 @@ func (db *DB) mmap(minsz int) error {
 
 func (db *DB) munmap() error {
 	if err := munmap(db); err != nil {
-		return errors.Wrap(err, "unmap err")
+		return errors.Wrapf(err, "unmap err")
 	}
 	return nil
 }
@@ -364,14 +363,14 @@ func (db *DB) mmapSize(size int) (int, error) {
 
 func (db *DB) munlock(fileSize int) error {
 	if err := munlock(db, fileSize); err != nil {
-		return errors.Wrap(err, "munlock err")
+		return errors.Wrapf(err, "munlock err")
 	}
 	return nil
 }
 
 func (db *DB) mlock(fileSize int) error {
 	if err := mlock(db, fileSize); err != nil {
-		return errors.Wrap(err, "mlock err")
+		return errors.Wrapf(err, "mlock err")
 	}
 	return nil
 }
@@ -456,12 +455,12 @@ func (db *DB) close() error {
 	if db.file != nil {
 		if !db.readOnly {
 			if err := funlock(db); err != nil {
-				return errors.Wrap(err, "funlock err")
+				return errors.Wrapf(err, "funlock err")
 			}
 		}
 
 		if err := db.file.Close(); err != nil {
-			return errors.Wrap(err, "file close err")
+			return errors.Wrapf(err, "file close err")
 		}
 		db.file = nil
 	}
@@ -887,7 +886,7 @@ func (db *DB) allocate(txid txid, count int) (*page, bool, error) {
 	var minsz = int((p.id+pgid(count))+1) * db.pageSize
 	if minsz >= db.datasz {
 		if err := db.mmap(minsz); err != nil {
-			return nil, false, errors.Wrap(err, "mmap allocate err")
+			return nil, false, errors.Wrapf(err, "mmap allocate err")
 		}
 	}
 
@@ -910,15 +909,15 @@ func (db *DB) grow(sz int) error {
 	if !db.NoGrowSync && !db.readOnly {
 		if runtime.GOOS != "windows" {
 			if err := db.file.Truncate(int64(sz)); err != nil {
-				return errors.Wrap(err, "file resize err")
+				return errors.Wrapf(err, "file resize err")
 			}
 		}
 		if err := db.file.Sync(); err != nil {
-			return errors.Wrap(err, "file sync err")
+			return errors.Wrapf(err, "file sync err")
 		}
 		if db.Mlock {
 			if err := db.mrelock(db.filesz, sz); err != nil {
-				return errors.Wrap(err, "mlock/munlock err")
+				return errors.Wrapf(err, "mlock/munlock err")
 			}
 		}
 	}

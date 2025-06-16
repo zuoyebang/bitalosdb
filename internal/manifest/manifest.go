@@ -16,9 +16,9 @@ package manifest
 
 import (
 	"bufio"
+	"os"
 	"sync"
 
-	"github.com/cockroachdb/errors/oserror"
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
 	"github.com/zuoyebang/bitalosdb/internal/mmap"
@@ -99,7 +99,7 @@ func (s *BitowerMetaEditor) GetNextFileNum() FileNum {
 func NewMetadata(path string, fs vfs.FS) (*Metadata, error) {
 	meta := &Metadata{fs: fs}
 
-	if _, err := fs.Stat(path); oserror.IsNotExist(err) {
+	if _, err := fs.Stat(path); os.IsNotExist(err) {
 		if err = meta.create(path); err != nil {
 			return nil, err
 		}

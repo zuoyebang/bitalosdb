@@ -18,14 +18,14 @@ import (
 	"os"
 	"path"
 
-	"github.com/cockroachdb/errors"
-	"github.com/cockroachdb/errors/oserror"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
+	"github.com/zuoyebang/bitalosdb/internal/os2"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 	"github.com/zuoyebang/bitalosdb/internal/vfs"
 )
 
 func (b *Bitpage) Checkpoint(fs vfs.FS, dstDir string) (err error) {
-	if _, err = os.Stat(dstDir); !oserror.IsNotExist(err) {
+	if os2.IsNotExist(dstDir) {
 		return errors.Errorf("bitpage: checkpoint dir exist %s", dstDir)
 	}
 
@@ -47,9 +47,6 @@ func (b *Bitpage) Checkpoint(fs vfs.FS, dstDir string) (err error) {
 		if b.PageSplitted(pn) {
 			return true
 		}
-
-		p.mu.Lock()
-		defer p.mu.Unlock()
 
 		if p.mu.stMutable != nil {
 			if err = p.makeMutableForWrite(true); err != nil {

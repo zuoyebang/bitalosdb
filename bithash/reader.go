@@ -21,10 +21,9 @@ import (
 	"os"
 	"runtime/debug"
 
-	"github.com/cockroachdb/errors"
-	"github.com/zuoyebang/bitalosdb/internal/bytepools"
-
 	"github.com/zuoyebang/bitalosdb/internal/bindex"
+	"github.com/zuoyebang/bitalosdb/internal/bytepools"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/zuoyebang/bitalosdb/internal/vfs"
 )
 

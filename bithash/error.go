@@ -36,5 +36,5 @@ var (
 	ErrBhHashIndexReadFail   = errors.New("bithash: hash_index read fail")
 	ErrBhFileNumMapCheckFail = errors.New("bithash: check fileNumMap file footer fail")
 	ErrBhInvalidTableSize    = errors.New("bithash: invalid table file size is too small")
-	ErrBhInvalidTableMeta    = errors.New("bithash:invalid table bad metaBH")
+	ErrBhInvalidTableMeta    = errors.New("bithash: invalid table bad metaBH")
 )

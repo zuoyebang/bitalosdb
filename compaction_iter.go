@@ -15,8 +15,8 @@
 package bitalosdb
 
 import (
-	"github.com/cockroachdb/errors"
 	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 )
 
 type compactionIter struct {

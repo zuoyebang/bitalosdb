@@ -23,7 +23,7 @@ import (
 
 	"github.com/zuoyebang/bitalosdb/internal/vfs"
 
-	"github.com/cockroachdb/errors"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/stretchr/testify/require"
 )
 

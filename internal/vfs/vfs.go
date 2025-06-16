@@ -19,9 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
-
-	"github.com/cockroachdb/errors"
-	"github.com/cockroachdb/errors/oserror"
 )
 
 // File is a readable, writable sequence of bytes.
@@ -165,23 +162,23 @@ func (defaultFS) Create(name string) (File, error) {
 
 	// We must loop in case another goroutine/thread/process is also
 	// attempting to create the a file at the same path.
-	for oserror.IsExist(err) {
-		if removeErr := os.Remove(name); removeErr != nil && !oserror.IsNotExist(removeErr) {
-			return f, errors.WithStack(removeErr)
+	for os.IsExist(err) {
+		if removeErr := os.Remove(name); removeErr != nil && !os.IsNotExist(removeErr) {
+			return f, removeErr
 		}
 		f, err = os.OpenFile(name, openFlags, 0666)
 	}
-	return f, errors.WithStack(err)
+	return f, err
 }
 
 func (defaultFS) Link(oldname, newname string) error {
-	return errors.WithStack(os.Link(oldname, newname))
+	return os.Link(oldname, newname)
 }
 
 func (defaultFS) Open(name string, opts ...OpenOption) (File, error) {
 	file, err := os.OpenFile(name, os.O_RDONLY|syscall.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, err
 	}
 	for _, opt := range opts {
 		opt.Apply(file)
@@ -190,37 +187,37 @@ func (defaultFS) Open(name string, opts ...OpenOption) (File, error) {
 }
 
 func (defaultFS) Remove(name string) error {
-	return errors.WithStack(os.Remove(name))
+	return os.Remove(name)
 }
 
 func (defaultFS) RemoveAll(name string) error {
-	return errors.WithStack(os.RemoveAll(name))
+	return os.RemoveAll(name)
 }
 
 func (defaultFS) Rename(oldname, newname string) error {
-	return errors.WithStack(os.Rename(oldname, newname))
+	return os.Rename(oldname, newname)
 }
 
 func (fs defaultFS) ReuseForWrite(oldname, newname string) (File, error) {
 	if err := fs.Rename(oldname, newname); err != nil {
-		return nil, errors.WithStack(err)
+		return nil, err
 	}
 	f, err := os.OpenFile(newname, os.O_RDWR|os.O_CREATE|syscall.O_CLOEXEC, 0666)
-	return f, errors.WithStack(err)
+	return f, err
 }
 
 func (fs defaultFS) OpenForWrite(name string) (File, error) {
 	f, err := os.OpenFile(name, os.O_RDWR|os.O_APPEND|syscall.O_CLOEXEC, 0666)
-	return f, errors.WithStack(err)
+	return f, err
 }
 
 func (fs defaultFS) OpenWR(name string) (File, error) {
 	f, err := os.OpenFile(name, os.O_RDWR|syscall.O_CLOEXEC, 0666)
-	return f, errors.WithStack(err)
+	return f, err
 }
 
 func (defaultFS) MkdirAll(dir string, perm os.FileMode) error {
-	return errors.WithStack(os.MkdirAll(dir, perm))
+	return os.MkdirAll(dir, perm)
 }
 
 func (defaultFS) List(dir string) ([]string, error) {
@@ -230,12 +227,12 @@ func (defaultFS) List(dir string) ([]string, error) {
 	}
 	defer f.Close()
 	dirnames, err := f.Readdirnames(-1)
-	return dirnames, errors.WithStack(err)
+	return dirnames, err
 }
 
 func (defaultFS) Stat(name string) (os.FileInfo, error) {
 	finfo, err := os.Stat(name)
-	return finfo, errors.WithStack(err)
+	return finfo, err
 }
 
 func (defaultFS) PathBase(path string) string {
@@ -303,7 +300,7 @@ func LinkOrCopy(fs FS, oldname, newname string) error {
 	// ERROR_NOT_SAME_DEVICE, ERROR_INVALID_FUNCTION, and
 	// ERROR_INVALID_PARAMETER. Rather that such OS specific checks, we fall back
 	// to always trying to copy if hard-linking failed.
-	if oserror.IsExist(err) || oserror.IsNotExist(err) || oserror.IsPermission(err) {
+	if os.IsExist(err) || os.IsNotExist(err) || os.IsPermission(err) {
 		return err
 	}
 	return Copy(fs, oldname, newname)

@@ -28,7 +28,7 @@ const (
 	EB = 1 << 50
 )
 
-func FmtSize(size uint64) string {
+func FmtSize(size int64) string {
 	if size < KB {
 		return fmt.Sprintf("%dB", size)
 	} else if size < MB {

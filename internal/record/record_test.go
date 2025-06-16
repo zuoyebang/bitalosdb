@@ -28,7 +28,7 @@ import (
 
 	"github.com/zuoyebang/bitalosdb/internal/base"
 
-	"github.com/cockroachdb/errors"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/rand"
 )

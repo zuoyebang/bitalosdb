@@ -12,14 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package base
+package bdb
 
-import "github.com/zuoyebang/bitalosdb/internal/errors"
-
-var ErrNotFound = errors.New("bitalosdb: not found")
-
-var ErrCorruption = errors.New("bitalosdb: corruption")
-
-func CorruptionErrorf(format string, args ...interface{}) error {
-	return errors.Wrapf(ErrCorruption, format, args...)
-}
+const maxMapSize = 0x7FFFFFFF
+const maxAllocSize = 0xFFFFFFF

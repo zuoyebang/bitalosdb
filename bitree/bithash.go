@@ -20,8 +20,15 @@ import (
 
 	"github.com/zuoyebang/bitalosdb/bithash"
 	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/consts"
 	"github.com/zuoyebang/bitalosdb/internal/hash"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
+)
+
+var (
+	bithashCompactLowerSize = int64(consts.BithashTableMaxSize)
+	bithashCompactUpperSize = bithashCompactLowerSize * 2
+	bithashCompactMiniSize  = int64(consts.BithashTableMaxSize - 1<<20)
 )
 
 func (t *Bitree) bithashGetByHash(key []byte, khash uint32, fn uint32) ([]byte, func(), error) {
@@ -60,51 +67,68 @@ func (t *Bitree) CompactBithash(deletePercent float64) {
 		return
 	}
 
-	logTag := fmt.Sprintf("[COMPACTBITHASH %d]", t.index)
+	var (
+		remainPercent   float64
+		reserveSize     int64
+		compactFileNums []bithash.FileNum
+	)
+
+	logTag := fmt.Sprintf("[COMPACTBITHASH %d] compact bithash", t.index)
+
+	compactBithash := func(fns []bithash.FileNum, size int64) {
+		if len(fns) == 0 {
+			return
+		}
+		t.opts.Logger.Infof("%s start fns:%v reserveSize:%s", logTag, fns, utils.FmtSize(size))
+		if err := t.compactBithashFiles(fns, logTag); err != nil {
+			t.opts.Logger.Errorf("%s fail err:%s", logTag, err)
+		}
+	}
 
 	delFiles := t.bhash.CheckFilesDelPercent(deletePercent)
-	delFilesNum := len(delFiles)
-	if delFilesNum > 1 {
-		var remainPercent float64
-		var delFileNums []bithash.FileNum
-		for i, file := range delFiles {
-			if file.DelPercent < 1 {
-				remainPercent += 1 - file.DelPercent
+	if len(delFiles) > 0 {
+		for _, file := range delFiles {
+			if file.DelPercent >= 1 {
+				remainPercent = 1
+			} else {
+				remainPercent = 1 - file.DelPercent
 			}
-			delFileNums = append(delFileNums, file.FileNum)
-			if remainPercent > 0.95 || (i == delFilesNum-1 && len(delFileNums) > 1) {
-				t.opts.Logger.Infof("%s compact bithash delPercent files start compactFn:%v remainPercent:%.4f",
-					logTag, delFileNums, remainPercent)
-				err := t.compactBithashFiles(delFileNums, logTag)
-				if err != nil {
-					t.opts.Logger.Errorf("%s compact bithash delPercent files fail err:%s", logTag, err)
-				}
-				remainPercent = 0
-				delFileNums = delFileNums[:0]
+			fileReserveSize := int64(float64(file.Size) * remainPercent)
+			reserveSize += fileReserveSize
+			if reserveSize < bithashCompactLowerSize {
+				compactFileNums = append(compactFileNums, file.FileNum)
+			} else if reserveSize < bithashCompactUpperSize {
+				compactFileNums = append(compactFileNums, file.FileNum)
+				compactBithash(compactFileNums, reserveSize)
+				reserveSize = 0
+				compactFileNums = compactFileNums[:0]
+			} else {
+				compactBithash(compactFileNums, reserveSize-fileReserveSize)
+				reserveSize = fileReserveSize
+				compactFileNums = compactFileNums[:0]
+				compactFileNums = append(compactFileNums, file.FileNum)
 			}
+		}
+
+		if len(compactFileNums) > 0 {
+			compactBithash(compactFileNums, reserveSize)
 		}
 	}
 
 	miniFiles := t.bhash.CheckFilesMiniSize()
 	miniFilesNum := len(miniFiles)
 	if miniFilesNum > 1 {
-		var remainSize int64
-		var miniFileNums []bithash.FileNum
-		fileMaxSize := t.bhash.TableMaxSize() - (1 << 20)
+		reserveSize = 0
+		compactFileNums = compactFileNums[:0]
 		for i, file := range miniFiles {
 			if file.Size > 0 {
-				remainSize += file.Size
+				reserveSize += file.Size
 			}
-			miniFileNums = append(miniFileNums, file.FileNum)
-			if remainSize > fileMaxSize || (i == miniFilesNum-1 && len(miniFileNums) > 1) {
-				t.opts.Logger.Infof("%s compact bithash miniSize files start compactFn:%v remainSize:%s",
-					logTag, miniFileNums, utils.FmtSize(uint64(remainSize)))
-				err := t.compactBithashFiles(miniFileNums, logTag)
-				if err != nil {
-					t.opts.Logger.Errorf("%s compact bithash miniSize files fail err:%s", logTag, err)
-				}
-				remainSize = 0
-				miniFileNums = miniFileNums[:0]
+			compactFileNums = append(compactFileNums, file.FileNum)
+			if reserveSize > bithashCompactMiniSize || (i == miniFilesNum-1 && len(compactFileNums) > 1) {
+				compactBithash(compactFileNums, reserveSize)
+				reserveSize = 0
+				compactFileNums = compactFileNums[:0]
 			}
 		}
 	}
@@ -136,7 +160,7 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 
 	compactFile := func(srcFn bithash.FileNum) (e error) {
 		var iter *bithash.TableIterator
-		var mgKeyNum, delKeyNum, expireKeyNum int
+		var iterKeyNum, mgKeyNum, delKeyNum, expireKeyNum int
 
 		start := time.Now()
 
@@ -145,19 +169,16 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 			return
 		}
 		defer func() {
-			if iter != nil {
-				e = iter.Close()
+			if err2 := iter.Close(); err2 != nil {
+				t.opts.Logger.Errorf("%s close iter panic err:%s", logTag, err2)
 			}
 
-			cost := time.Since(start).Seconds()
 			if e == nil {
 				if delKeyNum > 0 {
 					delKeyTotal += delKeyNum
 				}
-				t.opts.Logger.Infof("%s compactFile %d to %d done mgKeyNum:%d delKeyNum:%d expireKeyNum:%d cost:%.4f",
-					logTag, srcFn, dstFn, mgKeyNum, delKeyNum, expireKeyNum, cost)
-			} else {
-				t.opts.Logger.Errorf("%s compactFile %d to %d fail err:%s", logTag, srcFn, dstFn, e)
+				t.opts.Logger.Infof("%s file %d to %d done iterKeyNum:%d mgKeyNum:%d delKeyNum:%d expireKeyNum:%d cost:%.4f",
+					logTag, srcFn, dstFn, iterKeyNum, mgKeyNum, delKeyNum, expireKeyNum, time.Since(start).Seconds())
 			}
 		}()
 
@@ -173,6 +194,8 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 		}
 
 		for ik, v, fn := iter.First(); iter.Valid(); ik, v, fn = iter.Next() {
+			iterKeyNum++
+
 			if _, ok := delFnMap[fn]; !ok {
 				delFnMap[fn] = true
 			}
@@ -190,14 +213,18 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 			}
 
 			if e = bw.AddIkey(ik, v, khash, fn); e != nil {
-				t.opts.Logger.Errorf("%s compactFile AddIkey fail ikey:%s keyFn:%d dstFn:%d err:%s", logTag, ik.String(), fn, dstFn, e)
 				return
 			}
 
 			if _, ok := mgFnMap[fn]; !ok {
 				mgFnMap[fn] = true
 			}
+
 			mgKeyNum++
+		}
+
+		if e = iter.Error(); e != nil {
+			return
 		}
 
 		for k := range delFnMap {
@@ -211,7 +238,7 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 
 	for _, compactFn := range fileNums {
 		if err = compactFile(compactFn); err != nil {
-			t.opts.Logger.Errorf("%s compactFile fail fn:%d err:%s", logTag, compactFn, err)
+			t.opts.Logger.Errorf("%s file %d to %d fail err:%s", logTag, compactFn, dstFn, err)
 			return err
 		}
 
@@ -243,7 +270,7 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 		}
 	}
 
-	t.opts.Logger.Infof("%s compact %v to %d success delKey:%d delKeyTotalOld:%d delKeyTotalNew:%d",
+	t.opts.Logger.Infof("%s files %v to %d success delKey:%d delKeyTotalOld:%d delKeyTotalNew:%d",
 		logTag, obsoleteFileNums, dstFn, delKeyTotal, delKeyTotalOld, int(t.bhash.StatsGetDelKeyTotal()))
 
 	return nil

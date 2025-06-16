@@ -23,6 +23,10 @@ func (w *PageWriter) Set(key internalKey, value []byte) error {
 	return w.p.set(key, value)
 }
 
+func (w *PageWriter) SetMultiValue(key internalKey, values ...[]byte) error {
+	return w.p.setMulti(key, values...)
+}
+
 func (w *PageWriter) UpdateMetaTimestamp() {
 	w.p.bp.meta.updatePagemetaTimestamp(w.p.pn)
 }

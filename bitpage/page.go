@@ -228,9 +228,6 @@ func (p *page) getFilesPath() []string {
 }
 
 func (p *page) close(delete bool) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	p.readState.Lock()
 	if p.readState.val != nil {
 		p.readState.val.unref()
@@ -252,13 +249,6 @@ func (p *page) close(delete bool) error {
 	}
 
 	return nil
-}
-
-func (p *page) getStMutableDeleteKeyRate() float64 {
-	p.mu.RLock()
-	total, delCount, pdCount := p.mu.stMutable.getKeyStats()
-	p.mu.RUnlock()
-	return p.getDeleteKeyRate(total, delCount, pdCount)
 }
 
 func (p *page) loadReadState() (*readState, func()) {
@@ -392,6 +382,15 @@ func (p *page) set(key internalKey, value []byte) error {
 	return st.set(key, value)
 }
 
+func (p *page) setMulti(key internalKey, values ...[]byte) error {
+	p.mu.RLock()
+	st := p.mu.stMutable
+	p.mu.RUnlock()
+
+	st.kindStatis(key.Kind())
+	return st.setMulti(key, values...)
+}
+
 func (p *page) deleteObsoleteFile(filename string) {
 	if utils.IsFileNotExist(filename) {
 		return
@@ -417,10 +416,7 @@ func (p *page) setFlushState(v uint32) {
 }
 
 func (p *page) memFlushFinish() error {
-	p.mu.RLock()
-	st := p.mu.stMutable
-	p.mu.RUnlock()
-	return st.mergeIndexes()
+	return p.mu.stMutable.mergeIndexes()
 }
 
 func (p *page) maybeScheduleFlush(flushSize uint64, isForce bool) bool {
@@ -446,7 +442,6 @@ func (p *page) maybeScheduleFlush(flushSize uint64, isForce bool) bool {
 		return true
 	}
 
-	p.mu.RLock()
 	stNum = len(p.mu.stQueue)
 	if stNum == 1 {
 		mtKeyNum = p.mu.stMutable.itemCount()
@@ -454,7 +449,6 @@ func (p *page) maybeScheduleFlush(flushSize uint64, isForce bool) bool {
 		mtModTime = p.mu.stMutable.getModTime()
 		mtKeyTotal, mtDelKeyCount, mtPdKeyCount = p.mu.stMutable.getKeyStats()
 	}
-	p.mu.RUnlock()
 
 	if stNum > 1 {
 		isFlush = true

@@ -19,6 +19,7 @@ import (
 	"io"
 	"unsafe"
 
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/zuoyebang/bitalosdb/internal/manual"
 )
 
@@ -87,12 +88,16 @@ func (w *block2Writer) set(key InternalKey, value []byte, fileNum FileNum) (int,
 	n, err := w.wr.Write(w.buf)
 	if err != nil {
 		return 0, err
+	} else if n != preSize {
+		return 0, errors.Errorf("bithash: panic write key return n not eq exp(%d) act(%d)", preSize, n)
 	}
 	wrn += n
 
 	n, err = w.wr.Write(value)
 	if err != nil {
 		return 0, err
+	} else if n != len(value) {
+		return 0, errors.Errorf("bithash: panic write value return n not eq exp(%d) act(%d)", len(value), n)
 	}
 	wrn += n
 

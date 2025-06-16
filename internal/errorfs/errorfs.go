@@ -25,8 +25,8 @@ import (
 
 	"github.com/zuoyebang/bitalosdb/internal/vfs"
 
-	"github.com/cockroachdb/errors"
-	"github.com/cockroachdb/errors/oserror"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
+	"github.com/zuoyebang/bitalosdb/internal/errors/oserror"
 )
 
 var ErrInjected = errors.New("injected error")

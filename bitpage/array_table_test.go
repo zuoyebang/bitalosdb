@@ -21,11 +21,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/require"
 	"github.com/zuoyebang/bitalosdb/internal/bindex"
 	"github.com/zuoyebang/bitalosdb/internal/cache/lrucache"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/zuoyebang/bitalosdb/internal/hash"
 	"github.com/zuoyebang/bitalosdb/internal/options"
 	"github.com/zuoyebang/bitalosdb/internal/sortedkv"
@@ -718,6 +718,8 @@ func Test_Bitrie_Perf(t *testing.T) {
 
 	bt := time.Now()
 	for _, opts := range [][]bool{
+		{false, false, false},
+		{true, false, false},
 		{false, false, true},
 	} {
 		bt0 := time.Now()
@@ -770,7 +772,7 @@ func Test_Bitrie_Perf(t *testing.T) {
 
 			getFunc := func(i int) {
 				skey := kvList[i].Key.UserKey
-				val, exist, _, closer := a.get(skey, 0 /*hash.Crc32(skey)*/)
+				val, exist, _, closer := a.get(skey, hash.Crc32(skey))
 				require.Equal(t, true, exist)
 				require.Equal(t, kvList[i].Value, val)
 				if closer != nil {

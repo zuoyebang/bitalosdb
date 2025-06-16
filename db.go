@@ -15,23 +15,21 @@
 package bitalosdb
 
 import (
-	"context"
 	"io"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/bitask"
 	"github.com/zuoyebang/bitalosdb/internal/cache"
 	"github.com/zuoyebang/bitalosdb/internal/compress"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/zuoyebang/bitalosdb/internal/options"
 	"github.com/zuoyebang/bitalosdb/internal/statemachine"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 	"github.com/zuoyebang/bitalosdb/internal/vfs"
-	"golang.org/x/sync/errgroup"
 )
 
 var (
@@ -455,14 +453,14 @@ func (d *DB) Close() (err error) {
 }
 
 func (d *DB) Flush() error {
-	g, _ := errgroup.WithContext(context.Background())
-	for i := range d.bitowers {
-		index := i
-		g.Go(func() error {
-			return d.bitowers[index].Flush()
-		})
+	flushed, err := d.AsyncFlush()
+	if err != nil {
+		return err
 	}
-	return g.Wait()
+	if flushed != nil {
+		<-flushed
+	}
+	return nil
 }
 
 func (d *DB) AsyncFlush() (<-chan struct{}, error) {
@@ -533,5 +531,11 @@ func (d *DB) initFlushedBitable() {
 		d.flushedBitable.Store(true)
 	} else {
 		d.flushedBitable.Store(false)
+	}
+}
+
+func (d *DB) ManualFlushBitpage() {
+	for i := range d.bitowers {
+		d.bitowers[i].ManualFlushBitpage()
 	}
 }

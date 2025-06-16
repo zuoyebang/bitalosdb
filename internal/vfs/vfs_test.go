@@ -22,7 +22,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cockroachdb/errors/oserror"
+	"github.com/zuoyebang/bitalosdb/internal/errors/oserror"
 	"github.com/stretchr/testify/require"
 )
 

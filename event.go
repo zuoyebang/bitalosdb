@@ -17,24 +17,9 @@ package bitalosdb
 import (
 	"time"
 
-	"github.com/zuoyebang/bitalosdb/internal/humanize"
-
 	"github.com/cockroachdb/redact"
+	"github.com/zuoyebang/bitalosdb/internal/humanize"
 )
-
-type DiskSlowInfo struct {
-	Path     string
-	Duration time.Duration
-}
-
-func (i DiskSlowInfo) String() string {
-	return redact.StringWithoutMarkers(i)
-}
-
-func (i DiskSlowInfo) SafeFormat(w redact.SafePrinter, _ rune) {
-	w.Printf("disk slowness detected: write to file %s has been ongoing for %0.1fs",
-		i.Path, redact.Safe(i.Duration.Seconds()))
-}
 
 type FlushInfo struct {
 	Index               int
@@ -91,17 +76,16 @@ func (i WALCreateInfo) String() string {
 
 func (i WALCreateInfo) SafeFormat(w redact.SafePrinter, _ rune) {
 	if i.Err != nil {
-		w.Printf("[BITOWER %d] WAL create error: %s", redact.Safe(i.Index), i.Err)
+		w.Printf("[BITOWER %d] WAL create error: %s", i.Index, i.Err)
 		return
 	}
 
 	if i.RecycledFileNum == 0 {
-		w.Printf("[BITOWER %d] WAL created %s", redact.Safe(i.Index), redact.Safe(i.FileNum))
+		w.Printf("[BITOWER %d] WAL created %s", i.Index, i.FileNum)
 		return
 	}
 
-	w.Printf("[BITOWER %d] WAL created %s (recycled %s)",
-		redact.Safe(i.Index), redact.Safe(i.FileNum), redact.Safe(i.RecycledFileNum))
+	w.Printf("[BITOWER %d] WAL created %s (recycled %s)", i.Index, i.FileNum, i.RecycledFileNum)
 }
 
 type WALDeleteInfo struct {
@@ -117,10 +101,10 @@ func (i WALDeleteInfo) String() string {
 
 func (i WALDeleteInfo) SafeFormat(w redact.SafePrinter, _ rune) {
 	if i.Err != nil {
-		w.Printf("[BITOWER %d] WAL delete error: %s", redact.Safe(i.Index), i.Err)
+		w.Printf("[BITOWER %d] WAL delete error: %s", i.Index, i.Err)
 		return
 	}
-	w.Printf("[BITOWER %d] WAL deleted %s", redact.Safe(i.Index), redact.Safe(i.FileNum))
+	w.Printf("[BITOWER %d] WAL deleted %s", i.Index, i.FileNum)
 }
 
 type WriteStallBeginInfo struct {
@@ -133,12 +117,11 @@ func (i WriteStallBeginInfo) String() string {
 }
 
 func (i WriteStallBeginInfo) SafeFormat(w redact.SafePrinter, _ rune) {
-	w.Printf("[BITOWER %d] write stall beginning: %s", redact.Safe(i.Index), redact.Safe(i.Reason))
+	w.Printf("[BITOWER %d] write stall beginning: %s", i.Index, i.Reason)
 }
 
 type EventListener struct {
 	BackgroundError func(error)
-	DiskSlow        func(DiskSlowInfo)
 	FlushBegin      func(FlushInfo)
 	FlushEnd        func(FlushInfo)
 	WALCreated      func(WALCreateInfo)
@@ -156,9 +139,6 @@ func (l *EventListener) EnsureDefaults(logger Logger) {
 		} else {
 			l.BackgroundError = func(error) {}
 		}
-	}
-	if l.DiskSlow == nil {
-		l.DiskSlow = func(info DiskSlowInfo) {}
 	}
 	if l.FlushBegin == nil {
 		l.FlushBegin = func(info FlushInfo) {}
@@ -189,9 +169,6 @@ func MakeLoggingEventListener(logger Logger) EventListener {
 		BackgroundError: func(err error) {
 			logger.Infof("background error: %s", err)
 		},
-		DiskSlow: func(info DiskSlowInfo) {
-			logger.Infof("%s", info)
-		},
 		FlushBegin: func(info FlushInfo) {
 			logger.Infof("%s", info)
 		},
@@ -220,10 +197,6 @@ func TeeEventListener(a, b EventListener) EventListener {
 		BackgroundError: func(err error) {
 			a.BackgroundError(err)
 			b.BackgroundError(err)
-		},
-		DiskSlow: func(info DiskSlowInfo) {
-			a.DiskSlow(info)
-			b.DiskSlow(info)
 		},
 		FlushBegin: func(info FlushInfo) {
 			a.FlushBegin(info)
