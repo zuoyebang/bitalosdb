@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	github.com/RoaringBitmap/roaring v1.9.0
-    github.com/cockroachdb/redact v1.1.5
+	github.com/cockroachdb/redact v1.1.5
 	github.com/golang/snappy v0.0.4
 	github.com/stretchr/testify v1.9.0
 	github.com/zuoyebang/bitalostable v1.0.1
