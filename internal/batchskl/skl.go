@@ -22,8 +22,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"golang.org/x/exp/rand"
 )
 
@@ -120,11 +120,11 @@ func (s *Skiplist) Add(keyOffset uint32) error {
 	data := (*s.storage)[keyOffset+1:]
 	v, n := binary.Uvarint(data)
 	if n <= 0 {
-		return errors.Errorf("corrupted batch entry: %d", errors.Safe(keyOffset))
+		return errors.Errorf("corrupted batch entry: %d", keyOffset)
 	}
 	data = data[n:]
 	if v > uint64(len(data)) {
-		return errors.Errorf("corrupted batch entry: %d", errors.Safe(keyOffset))
+		return errors.Errorf("corrupted batch entry: %d", keyOffset)
 	}
 	keyStart := 1 + keyOffset + uint32(n)
 	keyEnd := keyStart + uint32(v)

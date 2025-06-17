@@ -22,7 +22,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zuoyebang/bitalosdb/internal/errors/oserror"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,12 +31,12 @@ func normalizeError(err error) error {
 	// oserror.Err* errors which have standard error messages across
 	// platforms.
 	switch {
-	case oserror.IsExist(err):
-		return oserror.ErrExist
-	case oserror.IsNotExist(err):
-		return oserror.ErrNotExist
-	case oserror.IsPermission(err):
-		return oserror.ErrPermission
+	case os.IsExist(err):
+		return os.ErrExist
+	case os.IsNotExist(err):
+		return os.ErrNotExist
+	case os.IsPermission(err):
+		return os.ErrPermission
 	}
 	return err
 }
