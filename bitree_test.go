@@ -65,8 +65,8 @@ func testOpenDB1(params []bool) *DB {
 	testOptsUsePrefixCompress = params[1]
 	testOptsUseBlockCompress = params[2]
 	optspool.BaseOptions.KvSeparateSize = 2000
-	optspool.BaseOptions.BitpageFlushSize = 1 << 20
-	optspool.BaseOptions.BitpageSplitSize = 2 << 20
+	testOptsBitpageFlushSize = 1 << 20
+	testOptsBitpageSplitSize = 2 << 20
 	return openTestDB(testDirname, optspool)
 }
 

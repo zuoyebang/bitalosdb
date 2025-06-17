@@ -24,7 +24,7 @@ import (
 )
 
 func (b *Bithash) Checkpoint(fs vfs.FS, destDir string) (err error) {
-	if !os2.IsNotExist(destDir) {
+	if os2.IsExist(destDir) {
 		return errors.Errorf("bithash: checkpoint dir exist %s", destDir)
 	}
 

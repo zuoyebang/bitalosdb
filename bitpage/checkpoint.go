@@ -25,7 +25,7 @@ import (
 )
 
 func (b *Bitpage) Checkpoint(fs vfs.FS, dstDir string) (err error) {
-	if os2.IsNotExist(dstDir) {
+	if os2.IsExist(dstDir) {
 		return errors.Errorf("bitpage: checkpoint dir exist %s", dstDir)
 	}
 
