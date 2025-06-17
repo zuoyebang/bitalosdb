@@ -26,11 +26,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/vfs"
-
-	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/require"
+	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
+	"github.com/zuoyebang/bitalosdb/internal/vfs"
 )
 
 type syncedBuffer struct {

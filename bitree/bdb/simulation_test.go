@@ -22,8 +22,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/cockroachdb/errors"
 	"github.com/zuoyebang/bitalosdb/bitree/bdb"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/zuoyebang/bitalosdb/internal/options"
 )
 

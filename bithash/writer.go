@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"math"
 	"sort"
 	"strconv"
 	"sync"
@@ -30,6 +31,7 @@ import (
 	"github.com/zuoyebang/bitalosdb/internal/compress"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
 	"github.com/zuoyebang/bitalosdb/internal/crc"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/zuoyebang/bitalosdb/internal/hash"
 	"github.com/zuoyebang/bitalosdb/internal/unsafe2"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
@@ -40,6 +42,7 @@ const (
 	maxKeySize           = 33 << 10
 	maxValueSize         = 256 << 20
 	blockRestartInterval = 16
+	dataMaxSize          = math.MaxUint32 - 256<<20
 )
 
 type writeCloseSyncer interface {
@@ -256,6 +259,11 @@ func (w *Writer) add(ikey InternalKey, value []byte, khash uint32, fileNum FileN
 		return ErrBhKeyTooLarge
 	} else if len(value) > maxValueSize {
 		return ErrBhValueTooLarge
+	}
+
+	kvSize := ikey.Size() + recordHeaderSize + len(value)
+	if w.meta.Size+uint32(kvSize) > dataMaxSize {
+		return errors.Errorf("bithash: panic add exceed data max size curSize:%d addSize:%d", w.meta.Size, kvSize)
 	}
 
 	n, err := w.dataBlock.set(ikey, value, fileNum)

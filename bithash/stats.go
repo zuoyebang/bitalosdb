@@ -68,7 +68,7 @@ func (b *Bithash) DebugInfo(dataType string) string {
 	buf := new(bytes.Buffer)
 	fmt.Fprintf(buf, "%s-bithash%d:dirname=%s dirSize=%s files=%d\n",
 		dataType, b.index, b.dirname,
-		utils.FmtSize(uint64(utils.GetDirSize(b.dirname))),
+		utils.FmtSize(utils.GetDirSize(b.dirname)),
 		len(b.meta.mu.filesMeta))
 
 	for fn, fileMeta := range b.meta.mu.filesMeta {

@@ -92,7 +92,7 @@ func (s *Bitower) passedFlushThreshold() bool {
 	return size >= minFlushSize
 }
 
-func (s *Bitower) maybeScheduleFlush(needReport bool) {
+func (s *Bitower) maybeScheduleFlush(needReport, isTask bool) {
 	if s.mu.compact.flushing || s.db.IsClosed() || len(s.mu.mem.queue) <= 1 {
 		return
 	}
@@ -103,13 +103,17 @@ func (s *Bitower) maybeScheduleFlush(needReport bool) {
 
 	s.mu.compact.flushing = true
 
-	s.db.memFlushTask.PushTask(&bitask.MemFlushTaskData{
-		Index:      s.index,
-		NeedReport: needReport,
-	})
+	if isTask {
+		s.db.memFlushTask.PushTask(&bitask.MemFlushTaskData{
+			Index:      s.index,
+			NeedReport: needReport,
+		})
+	} else {
+		go s.flush(needReport, false)
+	}
 }
 
-func (s *Bitower) flush(needReport bool) {
+func (s *Bitower) flush(needReport, isTask bool) {
 	pprof.Do(context.Background(), flushLabels, func(context.Context) {
 		defer func() {
 			if r := recover(); r != any(nil) {
@@ -122,7 +126,7 @@ func (s *Bitower) flush(needReport bool) {
 
 		defer func() {
 			s.mu.compact.flushing = false
-			s.maybeScheduleFlush(true)
+			s.maybeScheduleFlush(true, isTask)
 			s.mu.compact.cond.Broadcast()
 		}()
 

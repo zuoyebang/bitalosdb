@@ -37,7 +37,6 @@ type FileType int
 
 const (
 	fileTypeManifest FileType = iota
-	fileTypeSklTable
 	fileTypeSuperTable
 	fileTypeSuperTableIndex
 	fileTypeArrayTable
@@ -51,8 +50,6 @@ func makeFilename(fileType FileType, pageNum PageNum, fileNum FileNum) string {
 	switch fileType {
 	case fileTypeManifest:
 		return manifestFileName
-	case fileTypeSklTable:
-		return fmt.Sprintf("%s_%s.st", pageNum, fileNum)
 	case fileTypeSuperTable:
 		return fmt.Sprintf("%s_%s.xt", pageNum, fileNum)
 	case fileTypeSuperTableIndex:
@@ -68,7 +65,7 @@ func makeFilepath(dirname string, fileType FileType, pageNum PageNum, fileNum Fi
 	switch fileType {
 	case fileTypeManifest:
 		return filepath.Join(dirname, manifestFileName)
-	case fileTypeSklTable, fileTypeSuperTable, fileTypeSuperTableIndex, fileTypeArrayTable:
+	case fileTypeSuperTable, fileTypeSuperTableIndex, fileTypeArrayTable:
 		return filepath.Join(dirname, makeFilename(fileType, pageNum, fileNum))
 	default:
 		return ""
@@ -105,8 +102,6 @@ func parseFilename(filename string) (fileType FileType, pageNum PageNum, fileNum
 		fileNum = FileNum(fn)
 
 		switch filename[i+1:] {
-		case "st":
-			return fileTypeSklTable, pageNum, fileNum, true
 		case "xt":
 			return fileTypeSuperTable, pageNum, fileNum, true
 		case "xti":

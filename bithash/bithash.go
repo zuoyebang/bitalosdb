@@ -171,7 +171,7 @@ func (b *Bithash) Close() (err error) {
 func (b *Bithash) RemoveTableFiles(fileNums []FileNum) {
 	var deleteFiles []string
 	for _, fileNum := range fileNums {
-		b.deleteReaders(fileNum)
+		b.DeleteReaders(fileNum)
 		b.meta.freeFileMetadata(fileNum)
 		filename := MakeFilepath(b.fs, b.dirname, fileTypeTable, fileNum)
 		if utils.IsFileNotExist(filename) {
@@ -235,7 +235,7 @@ func (b *Bithash) addReaders(r *Reader) {
 	b.bhtReaders.Store(r.fileNum, r)
 }
 
-func (b *Bithash) deleteReaders(fn FileNum) {
+func (b *Bithash) DeleteReaders(fn FileNum) {
 	b.bhtReaders.Delete(fn)
 }
 

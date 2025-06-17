@@ -70,6 +70,6 @@ func MakeSortedKeyForBitrie(n int) []byte {
 	if n < 0 {
 		return []byte(sortedKeyPrefix)
 	} else {
-		return []byte(sortedKeyPrefix + string(utils.FuncRandBytes(1)) + "_bitalosdb_" + string(utils.FuncRandBytes(64)) + strconv.Itoa(n))
+		return []byte(sortedKeyPrefix + string(utils.FuncRandBytes(1)) + "_bitalosdb_" + string(utils.FuncRandBytes(32)) + strconv.Itoa(n))
 	}
 }

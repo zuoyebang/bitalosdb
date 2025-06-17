@@ -15,8 +15,11 @@
 package bitree
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os"
+	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -24,9 +27,11 @@ import (
 	"github.com/zuoyebang/bitalosdb/bithash"
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/hash"
+	"github.com/zuoyebang/bitalosdb/internal/sortedkv"
+	"github.com/zuoyebang/bitalosdb/internal/utils"
 )
 
-func TestBithash_Compact(t *testing.T) {
+func TestBithashCompact(t *testing.T) {
 	defer os.RemoveAll(testDir)
 	os.RemoveAll(testDir)
 
@@ -94,7 +99,7 @@ func TestBithash_Compact(t *testing.T) {
 	require.NoError(t, testBitreeClose(btree))
 
 	readNum := readFun()
-	require.Equal(t, int(1000), readNum)
+	require.Equal(t, 1000, readNum)
 	require.Equal(t, bithash.FileNum(4), btree.bhash.GetFileNumMap(bithash.FileNum(4)))
 	require.NoError(t, testBitreeClose(btree))
 
@@ -117,7 +122,7 @@ func TestBithash_Compact(t *testing.T) {
 	require.NoError(t, testBitreeClose(btree))
 }
 
-func TestBithash_Compact2(t *testing.T) {
+func TestBithashCompact2(t *testing.T) {
 	defer os.RemoveAll(testDir)
 	os.RemoveAll(testDir)
 
@@ -202,7 +207,7 @@ func TestBithash_Compact2(t *testing.T) {
 	require.NoError(t, testBitreeClose(btree))
 }
 
-func TestBithash_Compact3(t *testing.T) {
+func TestBithashCompact3(t *testing.T) {
 	defer os.RemoveAll(testDir)
 	os.RemoveAll(testDir)
 
@@ -277,5 +282,184 @@ func TestBithash_Compact3(t *testing.T) {
 		}
 	}
 	require.Equal(t, num-deleteNum, readNum)
+	require.NoError(t, testBitreeClose(btree))
+}
+
+func TestBithashCompact4(t *testing.T) {
+	defer os.RemoveAll(testDir)
+	os.RemoveAll(testDir)
+
+	testBithashSize = 1 << 20
+	btree, _ := testOpenBitree()
+	nowTime := uint64(time.Now().UnixMilli())
+	num := 2000
+	seqNum := uint64(0)
+	var kvList sortedkv.SortedKVList
+	for i := 0; i < num; i++ {
+		key := sortedkv.MakeSlotKey([]byte("testkey_"+strconv.Itoa(i)), testBitreeIndex)
+		ikey := base.MakeInternalKey(key, seqNum, base.InternalKeyKindSet)
+		kvList = append(kvList, sortedkv.SortedKVItem{
+			Key: &ikey,
+		})
+		seqNum++
+	}
+	sort.Sort(kvList)
+	for i := 0; i < num; i++ {
+		rvalue := utils.FuncRandBytes(1024)
+		v := make([]byte, len(rvalue)+9)
+		v[0] = uint8(1)
+		if i%4 == 0 {
+			binary.BigEndian.PutUint64(v[1:9], nowTime-2000)
+			copy(v[9:], rvalue)
+		} else {
+			binary.BigEndian.PutUint64(v[1:9], 0)
+			copy(v[1:], rvalue)
+		}
+		kvList[i].Value = v
+	}
+
+	bw, err := btree.NewBitreeWriter()
+	require.NoError(t, err)
+	for i := 0; i < num; i++ {
+		pn, sentinel, closer := btree.FindKeyPageNum(kvList[i].Key.UserKey)
+		closer()
+		require.NotEqual(t, nilPageNum, pn)
+		require.NoError(t, bw.set(*kvList[i].Key, kvList[i].Value, pn, sentinel))
+	}
+	require.NoError(t, bw.Finish())
+	time.Sleep(1 * time.Second)
+
+	bw, err = btree.NewBitreeWriter()
+	require.NoError(t, err)
+	for i := 0; i < num; i++ {
+		if i%2 == 0 {
+			pn, sentinel, closer := btree.FindKeyPageNum(kvList[i].Key.UserKey)
+			closer()
+			require.NotEqual(t, nilPageNum, pn)
+			kvList[i].Key.SetKind(base.InternalKeyKindDelete)
+			kvList[i].Key.SetSeqNum(seqNum)
+			kvList[i].Value = []byte(nil)
+			require.NoError(t, bw.set(*kvList[i].Key, kvList[i].Value, pn, sentinel))
+			seqNum++
+		}
+	}
+	require.NoError(t, bw.Finish())
+	time.Sleep(1 * time.Second)
+
+	btree.CompactBithash(0.05)
+	require.NoError(t, testBitreeClose(btree))
+
+	btree, _ = testOpenBitree()
+	findNum := 0
+	for i := 0; i < num; i++ {
+		key := kvList[i].Key.UserKey
+		value, vexist, vpool := btree.Get(key, hash.Crc32(key))
+		if i%2 == 0 {
+			require.Equal(t, false, vexist)
+		} else {
+			require.Equal(t, true, vexist)
+			require.Equal(t, kvList[i].Value, value)
+			vpool()
+			findNum++
+		}
+	}
+	require.Equal(t, 1000, findNum)
+
+	require.NoError(t, testBitreeClose(btree))
+}
+
+func TestBithashCompact5(t *testing.T) {
+	defer os.RemoveAll(testDir)
+	os.RemoveAll(testDir)
+
+	testBithashSize = 1 << 20
+	deletePercent := 0.1
+	btree, _ := testOpenBitree()
+	num := 7000
+	seqNum := uint64(0)
+	var kvList sortedkv.SortedKVList
+	for i := 0; i < num; i++ {
+		key := sortedkv.MakeSlotKey([]byte("testkey_"+strconv.Itoa(i)), testBitreeIndex)
+		ikey := base.MakeInternalKey(key, seqNum, base.InternalKeyKindSet)
+		kvList = append(kvList, sortedkv.SortedKVItem{Key: &ikey})
+		seqNum++
+	}
+	sort.Sort(kvList)
+	for i := 0; i < num; i++ {
+		rvalue := utils.FuncRandBytes(1024)
+		v := make([]byte, len(rvalue)+9)
+		v[0] = uint8(1)
+		binary.BigEndian.PutUint64(v[1:9], 0)
+		copy(v[1:], rvalue)
+		kvList[i].Value = v
+	}
+
+	bw, err := btree.NewBitreeWriter()
+	require.NoError(t, err)
+	for i := 0; i < num/2; i++ {
+		pn, sentinel, closer := btree.FindKeyPageNum(kvList[i].Key.UserKey)
+		closer()
+		require.NotEqual(t, nilPageNum, pn)
+		require.NoError(t, bw.set(*kvList[i].Key, kvList[i].Value, pn, sentinel))
+	}
+	require.NoError(t, bw.Finish())
+	require.NoError(t, testBitreeClose(btree))
+
+	testBithashSize = 1 << 21
+	btree, _ = testOpenBitree()
+	bw, err = btree.NewBitreeWriter()
+	require.NoError(t, err)
+	for i := num / 2; i < num; i++ {
+		pn, sentinel, closer := btree.FindKeyPageNum(kvList[i].Key.UserKey)
+		closer()
+		require.NotEqual(t, nilPageNum, pn)
+		require.NoError(t, bw.set(*kvList[i].Key, kvList[i].Value, pn, sentinel))
+	}
+	require.NoError(t, bw.Finish())
+	time.Sleep(1 * time.Second)
+
+	bw, err = btree.NewBitreeWriter()
+	require.NoError(t, err)
+	for i := 0; i < num; i++ {
+		if i%2 == 0 {
+			pn, sentinel, closer := btree.FindKeyPageNum(kvList[i].Key.UserKey)
+			closer()
+			require.NotEqual(t, nilPageNum, pn)
+			kvList[i].Key.SetKind(base.InternalKeyKindDelete)
+			kvList[i].Key.SetSeqNum(seqNum)
+			kvList[i].Value = []byte(nil)
+			require.NoError(t, bw.set(*kvList[i].Key, kvList[i].Value, pn, sentinel))
+			seqNum++
+		}
+	}
+	require.NoError(t, bw.Finish())
+	time.Sleep(1 * time.Second)
+
+	delFiles := btree.bhash.CheckFilesDelPercent(deletePercent)
+	require.Equal(t, 5, len(delFiles))
+
+	bithashCompactLowerSize = 700 << 10
+	bithashCompactUpperSize = 1400 << 10
+	bithashCompactMiniSize = 2 << 20
+	btree.CompactBithash(deletePercent)
+	stats := btree.BithashStats()
+	require.Equal(t, uint32(3), stats.FileTotal.Load())
+	require.NoError(t, testBitreeClose(btree))
+
+	btree, _ = testOpenBitree()
+	findNum := 0
+	for i := 0; i < num; i++ {
+		key := kvList[i].Key.UserKey
+		value, vexist, vpool := btree.Get(key, hash.Crc32(key))
+		if i%2 == 0 {
+			require.Equal(t, false, vexist)
+		} else {
+			require.Equal(t, true, vexist)
+			require.Equal(t, kvList[i].Value, value)
+			vpool()
+			findNum++
+		}
+	}
+	require.Equal(t, num/2, findNum)
 	require.NoError(t, testBitreeClose(btree))
 }

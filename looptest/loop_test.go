@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/errors/oserror"
+	"github.com/zuoyebang/bitalosdb/internal/errors/oserror"
 	"github.com/stretchr/testify/require"
 	"github.com/zuoyebang/bitalosdb"
 	"github.com/zuoyebang/bitalosdb/internal/consts"

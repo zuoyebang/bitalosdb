@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cockroachdb/errors"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 )
 
 // Limit defines the maximum frequency of some events.

@@ -32,6 +32,7 @@ const (
 	MaxKeySize                    int   = 62 << 10
 	KvSeparateSize                int   = 256
 	BithashTableMaxSize           int   = 512 << 20
+	BithashCompactLargeFileSize   int64 = 1 << 30
 	CompactToBitableCiMaxSize     int   = 512 << 20
 	UseBitableBitreeMaxSize       int64 = 24 << 30
 	UseBitableForceCompactMaxSize int64 = 16 << 30
@@ -83,8 +84,8 @@ const (
 	BitpageBlockSize             uint32 = 32 << 10
 	BitpageBlockCacheHashSize    int    = 24 << 10
 	BitpageBlockMinItemCount     int    = 40
-	BitpageFlushSize             uint64 = 256 << 20
-	BitpageSplitSize             uint64 = 592 << 20
+	BitpageDefaultFlushSize      uint64 = 256 << 20
+	BitpageDefaultSplitSize      uint64 = 592 << 20
 	BitpageSplitNum              int    = 3
 	BitpageInitMmapSize          int    = 4 << 30
 )

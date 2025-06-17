@@ -61,7 +61,7 @@ func TestLogRecycler(t *testing.T) {
 	require.EqualValues(t, []FileNum{4, 5, 6}, r.logNums())
 	require.EqualValues(t, 7, r.maxLogNum())
 
-	require.Regexp(t, `invalid 5 vs \[4 5 6\]`, r.pop(5))
+	require.Regexp(t, `invalid 5 vs \[000004 000005 000006\]`, r.pop(5))
 
 	require.NoError(t, r.pop(4))
 	require.EqualValues(t, []FileNum{5, 6}, r.logNums())

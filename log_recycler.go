@@ -17,7 +17,7 @@ package bitalosdb
 import (
 	"sync"
 
-	"github.com/cockroachdb/errors"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 )
 
 type logRecycler struct {
@@ -78,7 +78,7 @@ func (r *logRecycler) pop(logNum FileNum) error {
 		return errors.New("bitalosdb: log recycler empty")
 	}
 	if r.mu.logs[0].fileNum != logNum {
-		return errors.Errorf("bitalosdb: log recycler invalid %d vs %d", errors.Safe(logNum), errors.Safe(fileInfoNums(r.mu.logs)))
+		return errors.Errorf("bitalosdb: log recycler invalid %d vs %v", logNum, fileInfoNums(r.mu.logs))
 	}
 	r.mu.logs = r.mu.logs[1:]
 	return nil

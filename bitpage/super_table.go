@@ -22,11 +22,10 @@ import (
 	"sort"
 	"sync/atomic"
 
-	"github.com/cockroachdb/errors"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
-
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
+	"github.com/zuoyebang/bitalosdb/internal/utils"
 )
 
 const (
@@ -162,6 +161,16 @@ func (s *superTable) setHeader() error {
 
 func (s *superTable) set(key internalKey, value []byte) error {
 	offset, err := s.writer.set(key, value)
+	if err != nil {
+		return err
+	}
+
+	s.pending = append(s.pending, offset)
+	return nil
+}
+
+func (s *superTable) setMulti(key internalKey, values ...[]byte) error {
+	offset, err := s.writer.setMulti(key, values...)
 	if err != nil {
 		return err
 	}

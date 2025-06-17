@@ -19,8 +19,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
 )
 

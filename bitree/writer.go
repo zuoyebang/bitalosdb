@@ -17,12 +17,12 @@ package bitree
 import (
 	"encoding/binary"
 
-	"github.com/cockroachdb/errors"
 	"github.com/zuoyebang/bitalosdb/bithash"
 	"github.com/zuoyebang/bitalosdb/bitpage"
 	"github.com/zuoyebang/bitalosdb/bitree/bdb"
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/bitask"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 )
 
 type BitreeWriter struct {
@@ -56,13 +56,13 @@ func (w *BitreeWriter) set(key base.InternalKey, value []byte, pn bitpage.PageNu
 
 	switch key.Kind() {
 	case base.InternalKeyKindSet:
-		keySeqNum := key.SeqNum()
 		if w.btree.IsKvSeparate(len(value)) {
-			keyFileNum, err := w.bhashWriter.Add(key, value)
+			keyFileNum, err := w.bhashWriter.Add(key.Clone(), value)
 			if err != nil {
 				return err
 			}
 
+			keySeqNum := key.SeqNum()
 			isExistTm, tm := w.btree.opts.KvTimestampFunc(value, 1)
 			if isExistTm {
 				var ev [20]byte
@@ -77,9 +77,9 @@ func (w *BitreeWriter) set(key base.InternalKey, value []byte, pn bitpage.PageNu
 				err = pageWriter.Set(key, ev[:])
 			}
 		} else {
-			ev, evCloser := base.EncodeInternalValue(value, keySeqNum, base.InternalKeyKindSet)
-			err = pageWriter.Set(key, ev)
-			evCloser()
+			var ev [8]byte
+			binary.LittleEndian.PutUint64(ev[:], key.Trailer)
+			err = pageWriter.SetMultiValue(key, ev[:], value)
 		}
 	case base.InternalKeyKindDelete, base.InternalKeyKindPrefixDelete:
 		err = pageWriter.Set(key, nil)

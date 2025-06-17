@@ -23,55 +23,32 @@ import (
 )
 
 const (
-	BitrieVersion    = 1
-	BitrieHeaderSize = 18
-	BitrieKeySize    = 1
-	BitrieIndexSize  = 4
+	childIndexMax uint32 = 4<<30 - 1
 )
 
-const (
-	InternalKindKeyPrune      uint8 = 1
-	InternalKindHasValue      uint8 = 2
-	InternalKindHasChildrenL1 uint8 = 4
-	InternalKindHasChildrenL2 uint8 = 8
-	InternalKindHasChildrenL3 uint8 = 16
-
-	KindChildrenL1Step uint32 = 65536
-	KindChildrenL2Step uint32 = 16777216
-)
-
-type Header struct {
-	version     uint16
-	reserved    uint16
-	keyOffset   uint16
-	indexOffset uint32
-	dataOffset  uint32
-	size        uint32
-}
-
-type Bitrie struct {
+type Bitriev struct {
 	header   Header
 	length   uint32
 	data     []byte
-	children map[uint8]*trienode
+	children map[uint8]*trienodev
 }
 
-type trienode struct {
+type trienodev struct {
 	key      uint8
 	prune    []byte
-	value    []byte
-	children map[uint8]*trienode
+	voffset  uint32
+	children map[uint8]*trienodev
 }
 
-type disknode struct {
+type disknodev struct {
 	prune      []byte
-	value      []byte
+	voffset    uint32
 	childCount uint8
 	childIndex uint32
 }
 
-func NewBitrie() *Bitrie {
-	root := &Bitrie{
+func NewBitriev() *Bitriev {
+	root := &Bitriev{
 		header:   Header{version: BitrieVersion},
 		length:   1,
 		data:     nil,
@@ -81,12 +58,12 @@ func NewBitrie() *Bitrie {
 	return root
 }
 
-func (bt *Bitrie) InitWriter() {
+func (bt *Bitriev) InitWriter() {
 	bt.length = 1
-	bt.children = make(map[uint8]*trienode, 1<<6)
+	bt.children = make(map[uint8]*trienodev, 1<<6)
 }
 
-func (bt *Bitrie) SetReader(d []byte, offset uint32) bool {
+func (bt *Bitriev) SetReader(d []byte, offset uint32) bool {
 	if d == nil {
 		return false
 	}
@@ -97,28 +74,28 @@ func (bt *Bitrie) SetReader(d []byte, offset uint32) bool {
 	return len(d) >= int(bt.header.size)
 }
 
-func (bt *Bitrie) Size() uint32 {
+func (bt *Bitriev) Size() uint32 {
 	return bt.header.size
 }
 
-func (bt *Bitrie) Add(key []byte, value []byte) {
+func (bt *Bitriev) Add(key []byte, voffset uint32) {
 	keyLength := len(key)
-	if keyLength <= 0 || len(value) <= 0 {
+	if keyLength <= 0 {
 		return
 	}
 
 	var ok bool
-	var childNode *trienode
+	var childNode *trienodev
 
 	children := bt.children
 
 	for i := 0; i < keyLength; i++ {
 		if childNode, ok = children[key[i]]; !ok {
-			newNode := &trienode{
+			newNode := &trienodev{
 				key:      key[i],
 				prune:    key[i+1:],
-				value:    value,
-				children: make(map[byte]*trienode, 1<<3),
+				voffset:  voffset,
+				children: make(map[byte]*trienodev, 1<<3),
 			}
 			children[key[i]] = newNode
 			bt.length += 1
@@ -140,27 +117,27 @@ func (bt *Bitrie) Add(key []byte, value []byte) {
 				if pruneKeyLength > tailKeyLength {
 					if n <= keyLength-1 {
 						bt.newPruneChildByNode(childNode, m)
-						bt.newPruneChildByKey(key[n:], value, childNode)
+						bt.newPruneChildByKey(key[n:], voffset, childNode)
 						childNode.prune = nil
 						bt.length += 2
 					} else if n > keyLength-1 {
 						bt.newPruneChildByNode(childNode, m)
 						childNode.prune = nil
-						childNode.value = value
+						childNode.voffset = voffset
 						bt.length += 1
 					}
 				} else if pruneKeyLength == tailKeyLength {
 					if n <= keyLength-1 {
 						bt.newPruneChildByNode(childNode, m)
-						bt.newPruneChildByKey(key[n:], value, childNode)
+						bt.newPruneChildByKey(key[n:], voffset, childNode)
 						childNode.prune = nil
 						bt.length += 2
 					} else if n > keyLength-1 {
-						childNode.value = value
+						childNode.voffset = voffset
 					}
 				} else if pruneKeyLength < tailKeyLength {
 					bt.newPruneChildByNode(childNode, m)
-					bt.newPruneChildByKey(key[n:], value, childNode)
+					bt.newPruneChildByKey(key[n:], voffset, childNode)
 					childNode.prune = nil
 					bt.length += 2
 				}
@@ -169,12 +146,12 @@ func (bt *Bitrie) Add(key []byte, value []byte) {
 				if pruneKeyLength > tailKeyLength {
 					if n <= keyLength-1 {
 						bt.newPruneChildByNode(childNode, m)
-						bt.newPruneChildByKey(key[n:], value, childNode)
+						bt.newPruneChildByKey(key[n:], voffset, childNode)
 						childNode.prune = childNode.prune[:m]
 						bt.length += 2
 					} else if n > keyLength-1 {
 						bt.newPruneChildByNode(childNode, m)
-						childNode.value = value
+						childNode.voffset = voffset
 						childNode.prune = childNode.prune[:m]
 						bt.length += 1
 					}
@@ -182,17 +159,17 @@ func (bt *Bitrie) Add(key []byte, value []byte) {
 				} else if pruneKeyLength == tailKeyLength {
 					if n <= keyLength-1 {
 						bt.newPruneChildByNode(childNode, m)
-						bt.newPruneChildByKey(key[n:], value, childNode)
+						bt.newPruneChildByKey(key[n:], voffset, childNode)
 						childNode.prune = childNode.prune[:m]
 						bt.length += 2
 					} else if n > keyLength-1 {
-						childNode.value = value
+						childNode.voffset = voffset
 					}
 					break
 				} else if pruneKeyLength < tailKeyLength {
 					if m <= pruneKeyLength-1 {
 						bt.newPruneChildByNode(childNode, m)
-						bt.newPruneChildByKey(key[n:], value, childNode)
+						bt.newPruneChildByKey(key[n:], voffset, childNode)
 						childNode.prune = childNode.prune[:m]
 						bt.length += 2
 						break
@@ -207,11 +184,11 @@ func (bt *Bitrie) Add(key []byte, value []byte) {
 	}
 }
 
-func (bt *Bitrie) Finish() {
+func (bt *Bitriev) Finish() {
 	bt.children = nil
 }
 
-func (bt *Bitrie) Serialize(
+func (bt *Bitriev) Serialize(
 	tblalloc func(uint32) uint32,
 	tblbytes func(uint32, uint32) []byte,
 	tblsize func() uint32) bool {
@@ -234,9 +211,9 @@ func (bt *Bitrie) Serialize(
 	bt.header.dataOffset = dataOffset
 
 	wrBuf := make([]byte, 256<<10)
-	dkNode := disknode{
+	dkNode := disknodev{
 		prune:      nil,
-		value:      nil,
+		voffset:    0,
 		childCount: 0,
 		childIndex: 0,
 	}
@@ -264,7 +241,7 @@ func (bt *Bitrie) Serialize(
 
 	for Queue.Len() > 0 {
 		elem := Queue.Front()
-		node := elem.Value.(*trienode)
+		node := elem.Value.(*trienodev)
 
 		bt.writeKey(tblbytes(keyOffset, BitrieKeySize), node.key)
 		keyOffset += BitrieKeySize
@@ -272,7 +249,7 @@ func (bt *Bitrie) Serialize(
 		bt.writeIndex(tblbytes(indexOffset, BitrieIndexSize), dataOffset)
 
 		dkNode.prune = node.prune
-		dkNode.value = node.value
+		dkNode.voffset = node.voffset
 		if len(node.children) > 0 {
 			dkNode.childIndex = itemIndex + uint32(Queue.Len())
 			dkNode.childCount = uint8(len(node.children) - 1)
@@ -299,11 +276,11 @@ func (bt *Bitrie) Serialize(
 	return true
 }
 
-func (bt *Bitrie) Get(key []byte) ([]byte, bool) {
+func (bt *Bitriev) Get(key []byte) (uint32, bool) {
 	keyOffset := uint32(bt.header.keyOffset)
 	indexOffset := bt.header.indexOffset
 
-	node := bt.readNode(bt.data[bt.header.dataOffset:], 0)
+	node := bt.readNode(bt.data[bt.header.dataOffset:])
 	childCount := node.childCount
 	childIndex := node.childIndex
 
@@ -317,41 +294,40 @@ func (bt *Bitrie) Get(key []byte) ([]byte, bool) {
 		find, childPos := bt.findNode(key[i], bt.data[keyOffset+childIndex:], tmpChildCount)
 		if find {
 			childIndex += childPos
-			nsize, offset := bt.getNodeSizeAndOffset(bt.data, indexOffset+childIndex*BitrieIndexSize)
-			node = bt.readNode(bt.data[offset:], nsize)
+			offset := binary.BigEndian.Uint32(bt.data[indexOffset+childIndex*BitrieIndexSize:])
+			node = bt.readNode(bt.data[offset:])
 
-			valueLength := len(node.value)
 			pruneLength := len(node.prune)
 			if pruneLength > 0 {
 				curKeyPos := i + 1 + pruneLength
 				if curKeyPos <= keyLength && bytes.Equal(node.prune, key[i+1:curKeyPos]) {
 					i += pruneLength
-					if i == keyLength-1 && valueLength > 0 {
-						return node.value, true
+					if i == keyLength-1 && node.voffset > 0 {
+						return node.voffset, true
 					} else {
 						childCount = node.childCount
 						childIndex = node.childIndex
 						continue
 					}
 				} else {
-					return nil, false
+					return 0, false
 				}
 			}
 			childCount = node.childCount
 			childIndex = node.childIndex
 
-			if i == keyLength-1 && valueLength > 0 {
-				return node.value, true
+			if i == keyLength-1 && node.voffset > 0 {
+				return node.voffset, true
 			}
 		} else {
-			return nil, false
+			return 0, false
 		}
 	}
 
-	return nil, false
+	return 0, false
 }
 
-func (bt *Bitrie) ToBytes() []byte {
+func (bt *Bitriev) ToBytes() []byte {
 	buf := make([]byte, 0, 1024)
 
 	queue := list.New()
@@ -359,9 +335,9 @@ func (bt *Bitrie) ToBytes() []byte {
 
 	for queue.Len() > 0 {
 		elem := queue.Front()
-		node := elem.Value.(*trienode)
+		node := elem.Value.(*trienodev)
 
-		buf = append(buf, fmt.Sprintf("key=%c; prune=%s; value=%s; ", node.key, node.prune, node.value)...)
+		buf = append(buf, fmt.Sprintf("key=%c; prune=%s; value=%d; ", node.key, node.prune, node.voffset)...)
 		if len(node.children) > 0 {
 			buf = append(buf, fmt.Sprintf("children[%d]=[", len(node.children))...)
 			for k, _ := range node.children {
@@ -379,14 +355,13 @@ func (bt *Bitrie) ToBytes() []byte {
 	return buf
 }
 
-func (bt *Bitrie) AnalyzeBytes() []byte {
+func (bt *Bitriev) AnalyzeBytes() []byte {
 	buf := make([]byte, 0, 10<<10)
 
 	keyOffset := uint32(bt.header.keyOffset)
 	indexOffset := bt.header.indexOffset
 
 	key := uint8(0)
-	offset_next := uint32(0)
 
 	count := indexOffset - keyOffset
 	buf = append(buf, fmt.Sprintf("Header version=%d; keyOffset=%d; indexOffset=%d; dataOffset=%d; itemCount=%d; size=%d\n", bt.header.version, keyOffset, indexOffset, bt.header.dataOffset, count, bt.header.size)...)
@@ -394,12 +369,7 @@ func (bt *Bitrie) AnalyzeBytes() []byte {
 		tmp_kpos := keyOffset + i
 		tmp_ipos := indexOffset + BitrieIndexSize*i
 		tmp_dpos := binary.BigEndian.Uint32(bt.data[tmp_ipos:])
-		if i == count-1 {
-			offset_next = bt.header.size
-		} else {
-			offset_next = binary.BigEndian.Uint32(bt.data[tmp_ipos+BitrieIndexSize:])
-		}
-		node := bt.readNode(bt.data[tmp_dpos:], offset_next-tmp_dpos)
+		node := bt.readNode(bt.data[tmp_dpos:])
 
 		key = bt.data[tmp_kpos]
 		if key == 0 {
@@ -409,37 +379,34 @@ func (bt *Bitrie) AnalyzeBytes() []byte {
 		if len(node.prune) == 0 {
 			node.prune = []byte(" ")
 		}
-		if len(node.value) == 0 {
-			node.value = []byte(" ")
-		}
 
 		tmpChildCount := uint32(node.childCount)
 		if node.childIndex > 0 {
 			tmpChildCount++
 		}
 
-		buf = append(buf, fmt.Sprintf("Item-%d keyOffset=%d; indexOffset=%d; dataOffset=%d; node.key=%c; node.prune=%s; node.value=%s; node.childCount=%v; node.childIndex=%v\n", i, tmp_ipos, tmp_ipos, tmp_dpos, key, node.prune, node.value, tmpChildCount, node.childIndex)...)
+		buf = append(buf, fmt.Sprintf("Item-%d keyOffset=%d; indexOffset=%d; dataOffset=%d; node.key=%c; node.prune=%s; node.voffset=%d; node.childCount=%v; node.childIndex=%v\n", i, tmp_ipos, tmp_ipos, tmp_dpos, key, node.prune, node.voffset, tmpChildCount, node.childIndex)...)
 	}
 
 	return buf
 }
 
-func (bt *Bitrie) newPruneChildByNode(node *trienode, offset int) *trienode {
+func (bt *Bitriev) newPruneChildByNode(node *trienodev, offset int) *trienodev {
 	pruneKeyLen := len(node.prune) - 1
 	if offset > pruneKeyLen {
 		return nil
 	}
 
-	newNode := &trienode{
-		key:   node.prune[offset],
-		value: node.value,
+	newNode := &trienodev{
+		key:     node.prune[offset],
+		voffset: node.voffset,
 	}
 
 	if len(node.children) > 0 {
 		newNode.children = node.children
-		node.children = make(map[byte]*trienode, 1<<3)
+		node.children = make(map[byte]*trienodev, 1<<3)
 	} else {
-		newNode.children = make(map[byte]*trienode, 1<<3)
+		newNode.children = make(map[byte]*trienodev, 1<<3)
 	}
 
 	node.children[newNode.key] = newNode
@@ -450,17 +417,17 @@ func (bt *Bitrie) newPruneChildByNode(node *trienode, offset int) *trienode {
 		newNode.prune = nil
 	}
 
-	node.value = nil
+	node.voffset = 0
 
 	return newNode
 }
 
-func (bt *Bitrie) newPruneChildByKey(key []byte, value []byte, node *trienode) *trienode {
-	newNode := &trienode{
+func (bt *Bitriev) newPruneChildByKey(key []byte, voffset uint32, node *trienodev) *trienodev {
+	newNode := &trienodev{
 		key:      key[0],
 		prune:    key[1:],
-		value:    value,
-		children: make(map[byte]*trienode, 1<<3),
+		voffset:  voffset,
+		children: make(map[byte]*trienodev, 1<<3),
 	}
 
 	node.children[newNode.key] = newNode
@@ -468,7 +435,7 @@ func (bt *Bitrie) newPruneChildByKey(key []byte, value []byte, node *trienode) *
 	return newNode
 }
 
-func (bt *Bitrie) readHeader(buf []byte) Header {
+func (bt *Bitriev) readHeader(buf []byte) Header {
 	header := Header{
 		version:     binary.BigEndian.Uint16(buf[0:]),
 		reserved:    binary.BigEndian.Uint16(buf[2:]),
@@ -481,7 +448,7 @@ func (bt *Bitrie) readHeader(buf []byte) Header {
 	return header
 }
 
-func (bt *Bitrie) writeHeader(buf []byte, header Header) {
+func (bt *Bitriev) writeHeader(buf []byte, header Header) {
 	binary.BigEndian.PutUint16(buf[0:], header.version)
 	binary.BigEndian.PutUint16(buf[2:], header.reserved)
 	binary.BigEndian.PutUint16(buf[4:], header.keyOffset)
@@ -490,24 +457,10 @@ func (bt *Bitrie) writeHeader(buf []byte, header Header) {
 	binary.BigEndian.PutUint32(buf[14:], header.size)
 }
 
-func (bt *Bitrie) getNodeSizeAndOffset(buf []byte, offset uint32) (uint32, uint32) {
-	lo := binary.BigEndian.Uint32(buf[offset:])
-
-	var ro uint32
-	offsetNext := offset + BitrieIndexSize
-	if offsetNext < bt.header.dataOffset {
-		ro = binary.BigEndian.Uint32(buf[offsetNext:])
-	} else {
-		ro = bt.header.size
-	}
-
-	return ro - lo, lo
-}
-
-func (bt *Bitrie) readNode(buf []byte, size uint32) disknode {
-	dkNode := disknode{
+func (bt *Bitriev) readNode(buf []byte) disknodev {
+	dkNode := disknodev{
 		prune:      nil,
-		value:      nil,
+		voffset:    0,
 		childCount: 0,
 		childIndex: 0,
 	}
@@ -539,22 +492,22 @@ func (bt *Bitrie) readNode(buf []byte, size uint32) disknode {
 		offset += 4
 	}
 
-	if kind&InternalKindHasValue == InternalKindHasValue && offset < size {
-		dkNode.value = buf[offset:size]
+	if kind&InternalKindHasValue == InternalKindHasValue {
+		dkNode.voffset = binary.BigEndian.Uint32(buf[offset:])
 	}
 
 	return dkNode
 }
 
-func (bt *Bitrie) writeKey(buf []byte, key uint8) {
+func (bt *Bitriev) writeKey(buf []byte, key uint8) {
 	buf[0] = key
 }
 
-func (bt *Bitrie) writeIndex(buf []byte, idx uint32) {
+func (bt *Bitriev) writeIndex(buf []byte, idx uint32) {
 	binary.BigEndian.PutUint32(buf[0:], idx)
 }
 
-func (bt *Bitrie) writeNode(buf []byte, dkNode *disknode) ([]byte, uint32) {
+func (bt *Bitriev) writeNode(buf []byte, dkNode *disknodev) ([]byte, uint32) {
 	kind := uint8(0)
 	offset := uint32(1)
 
@@ -588,11 +541,10 @@ func (bt *Bitrie) writeNode(buf []byte, dkNode *disknode) ([]byte, uint32) {
 		}
 	}
 
-	valueLength := uint32(len(dkNode.value))
-	if valueLength > 0 {
+	if dkNode.voffset > 0 {
 		kind |= InternalKindHasValue
-		copy(buf[offset:offset+valueLength], dkNode.value)
-		offset += valueLength
+		binary.BigEndian.PutUint32(buf[offset:], dkNode.voffset)
+		offset += 4
 	}
 
 	buf[0] = kind
@@ -600,7 +552,7 @@ func (bt *Bitrie) writeNode(buf []byte, dkNode *disknode) ([]byte, uint32) {
 	return buf[0:offset], offset
 }
 
-func (bt *Bitrie) findNode(key uint8, buf []byte, n uint32) (bool, uint32) {
+func (bt *Bitriev) findNode(key uint8, buf []byte, n uint32) (bool, uint32) {
 	i, j := uint32(0), n
 	for i < j {
 		h := (i + j) >> 1
@@ -611,14 +563,18 @@ func (bt *Bitrie) findNode(key uint8, buf []byte, n uint32) (bool, uint32) {
 		}
 	}
 
-	if i < n && buf[i] == key {
-		return true, i
+	if i < n {
+		if buf[i] == key {
+			return true, i
+		} else {
+			return false, i
+		}
 	}
 
-	return false, 0
+	return false, childIndexMax
 }
 
-func (bt *Bitrie) pushQueue(queue *list.List, children map[uint8]*trienode) {
+func (bt *Bitriev) pushQueue(queue *list.List, children map[uint8]*trienodev) {
 	childCount := len(children)
 	if childCount <= 0 {
 		return

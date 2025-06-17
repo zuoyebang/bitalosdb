@@ -22,12 +22,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/errors"
-	"github.com/cockroachdb/errors/oserror"
 	"github.com/stretchr/testify/require"
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/compress"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/zuoyebang/bitalosdb/internal/options"
 	"github.com/zuoyebang/bitalosdb/internal/sortedkv"
 	"github.com/zuoyebang/bitalosdb/internal/unsafe2"
@@ -43,15 +42,17 @@ const (
 )
 
 var (
-	testOptsCompressType      int   = compress.CompressTypeNo
-	testOptsDisableWAL        bool  = false
-	testOptsUseMapIndex       bool  = true
-	testOptsUsePrefixCompress bool  = false
-	testOptsUseBlockCompress  bool  = false
-	testOptsCacheType         int   = consts.CacheTypeLru
-	testOptsCacheSize         int64 = 0
-	testOptsMemtableSize      int   = testMemTableSize
-	testOptsUseBitable        bool  = false
+	testOptsCompressType      int    = compress.CompressTypeNo
+	testOptsDisableWAL        bool   = false
+	testOptsUseMapIndex       bool   = true
+	testOptsUsePrefixCompress bool   = false
+	testOptsUseBlockCompress  bool   = false
+	testOptsCacheType         int    = consts.CacheTypeLru
+	testOptsCacheSize         int64  = 0
+	testOptsMemtableSize      int    = testMemTableSize
+	testOptsUseBitable        bool   = false
+	testOptsBitpageFlushSize  uint64 = consts.BitpageDefaultFlushSize
+	testOptsBitpageSplitSize  uint64 = consts.BitpageDefaultSplitSize
 )
 
 func resetTestOptsVal() {
@@ -64,6 +65,8 @@ func resetTestOptsVal() {
 	testOptsCacheSize = 0
 	testOptsMemtableSize = testMemTableSize
 	testOptsUseBitable = false
+	testOptsBitpageFlushSize = consts.BitpageDefaultFlushSize
+	testOptsBitpageSplitSize = consts.BitpageDefaultSplitSize
 }
 
 var defaultLargeValBytes []byte
@@ -103,9 +106,11 @@ func openTestDB(dir string, optspool *options.OptionsPool) *DB {
 		KeyPrefixDeleteFunc:         options.TestKeyPrefixDeleteFunc,
 		KvCheckExpireFunc:           options.TestKvCheckExpireFunc,
 		KvTimestampFunc:             options.TestKvTimestampFunc,
+		BitpageFlushSize:            testOptsBitpageFlushSize,
+		BitpageSplitSize:            testOptsBitpageSplitSize,
 	}
 	_, err := os.Stat(dir)
-	if oserror.IsNotExist(err) {
+	if os.IsNotExist(err) {
 		if err = os.MkdirAll(dir, 0775); err != nil {
 			panic(err)
 		}

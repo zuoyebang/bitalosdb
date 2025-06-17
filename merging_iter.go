@@ -20,10 +20,9 @@ import (
 	"runtime/debug"
 
 	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/zuoyebang/bitalosdb/internal/invariants"
 	"github.com/zuoyebang/bitalosdb/internal/utils"
-
-	"github.com/cockroachdb/errors"
 )
 
 type mergingIterLevel struct {

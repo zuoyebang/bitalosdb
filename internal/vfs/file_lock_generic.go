@@ -20,7 +20,7 @@ import (
 	"io"
 	"runtime"
 
-	"github.com/cockroachdb/errors"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 )
 
 func (defFS) Lock(name string) (io.Closer, error) {

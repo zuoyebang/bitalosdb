@@ -19,8 +19,8 @@ import (
 	"encoding/binary"
 	"io"
 
-	"github.com/cockroachdb/errors"
 	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 )
 
 const (
@@ -305,7 +305,7 @@ func (b *Bithash) NewTableIter(fileNum FileNum) (*TableIterator, error) {
 		reader:  f,
 		fileNum: fileNum,
 		offset:  0,
-		kvBuf:   make([]byte, 1024, 1024),
+		kvBuf:   make([]byte, 1024),
 	}
 	return iter, nil
 }
@@ -321,6 +321,10 @@ type TableIterator struct {
 	iterValue []byte
 	eof       bool
 	err       error
+}
+
+func (i *TableIterator) Error() error {
+	return i.err
 }
 
 func (i *TableIterator) Valid() bool {
@@ -354,6 +358,9 @@ func (i *TableIterator) findEntry() (key *InternalKey, value []byte, fileNum Fil
 
 	n, err := i.reader.ReadAt(i.header[:], i.offset)
 	if err != nil || n != recordHeaderSize {
+		if n != recordHeaderSize {
+			err = errors.Errorf("TableIterator findEntry read header n not eq exp(%d) act(%d)", recordHeaderSize, n)
+		}
 		i.eof = true
 		i.err = err
 		return
@@ -371,6 +378,9 @@ func (i *TableIterator) findEntry() (key *InternalKey, value []byte, fileNum Fil
 	i.kvBuf = i.kvBuf[:kvLen]
 	n, err = i.reader.ReadAt(i.kvBuf, i.offset+recordHeaderSize)
 	if err != nil || n != int(kvLen) {
+		if n != int(kvLen) {
+			err = errors.Errorf("TableIterator findEntry read kv n not eq exp(%d) act(%d)", kvLen, n)
+		}
 		i.eof = true
 		i.err = err
 		return

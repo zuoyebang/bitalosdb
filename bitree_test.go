@@ -43,8 +43,8 @@ var testOptsParams = [][]bool{
 func testOpenDB(useBitable bool) *DB {
 	optspool := options.InitDefaultsOptionsPool()
 	testOptsUseBitable = useBitable
-	optspool.BaseOptions.BitpageFlushSize = 10 << 20
-	optspool.BaseOptions.BitpageSplitSize = 15 << 20
+	testOptsBitpageFlushSize = 10 << 20
+	testOptsBitpageSplitSize = 15 << 20
 	optspool.BithashOptions.TableMaxSize = 10 << 20
 	return openTestDB(testDirname, optspool)
 }
@@ -53,8 +53,8 @@ func testOpenDB0(useBitable bool) *DB {
 	optspool := options.InitDefaultsOptionsPool()
 	testOptsUseBitable = useBitable
 	optspool.BaseOptions.KvSeparateSize = 2000
-	optspool.BaseOptions.BitpageFlushSize = 1 << 20
-	optspool.BaseOptions.BitpageSplitSize = 2 << 20
+	testOptsBitpageFlushSize = 1 << 20
+	testOptsBitpageSplitSize = 2 << 20
 	return openTestDB(testDirname, optspool)
 }
 
@@ -65,8 +65,8 @@ func testOpenDB1(params []bool) *DB {
 	testOptsUsePrefixCompress = params[1]
 	testOptsUseBlockCompress = params[2]
 	optspool.BaseOptions.KvSeparateSize = 2000
-	optspool.BaseOptions.BitpageFlushSize = 1 << 20
-	optspool.BaseOptions.BitpageSplitSize = 2 << 20
+	testOptsBitpageFlushSize = 1 << 20
+	testOptsBitpageSplitSize = 2 << 20
 	return openTestDB(testDirname, optspool)
 }
 
@@ -78,8 +78,8 @@ func testOpenDB2(params []bool) *DB {
 	testOptsUseBlockCompress = params[2]
 	optspool.BaseOptions.UseBitable = true
 	optspool.BaseOptions.BitpageFlushSize = 10 << 20
-	optspool.BaseOptions.BitpageSplitSize = 15 << 20
-	optspool.BithashOptions.TableMaxSize = 10 << 20
+	testOptsBitpageFlushSize = 10 << 20
+	testOptsBitpageSplitSize = 15 << 20
 	return openTestDB(testDirname, optspool)
 }
 

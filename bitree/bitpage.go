@@ -150,10 +150,6 @@ func (t *Bitree) checkPageSplitted(pn uint32) bool {
 	return t.bpage.PageSplitted2(bitpage.PageNum(pn))
 }
 
-func (t *Bitree) GetGetNeedFlushBitPageNums(isForce bool) []bitpage.PageNum {
-	return t.bpage.GetNeedFlushPageNums(isForce)
-}
-
 func (t *Bitree) MaybeScheduleFlush(isForce bool) {
 	pns := t.bpage.GetNeedFlushPageNums(isForce)
 	if len(pns) == 0 {
@@ -169,5 +165,5 @@ func (t *Bitree) MaybeScheduleFlush(isForce bool) {
 		})
 	}
 
-	t.opts.Logger.Infof("[BITPAGE %d] manualScheduleFlush pns:%v", t.index, pns)
+	t.opts.Logger.Infof("[BITPAGE %d] manualScheduleFlush isForce:%v pns:%v", t.index, isForce, pns)
 }

@@ -254,7 +254,9 @@ func (b *Bitpage) GetPageStMutableDeleteKeyRate(pn PageNum) float64 {
 	if p == nil {
 		return 0
 	}
-	return p.getStMutableDeleteKeyRate()
+
+	total, delCount, pdCount := p.mu.stMutable.getKeyStats()
+	return p.getDeleteKeyRate(total, delCount, pdCount)
 }
 
 func (b *Bitpage) pageNoneSplit(pn PageNum) bool {

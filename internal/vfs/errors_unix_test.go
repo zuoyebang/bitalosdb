@@ -19,7 +19,7 @@ package vfs
 import (
 	"testing"
 
-	"github.com/cockroachdb/errors"
+	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )

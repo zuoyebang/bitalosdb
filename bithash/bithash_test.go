@@ -390,6 +390,39 @@ func TestBithashWriterFlush(t *testing.T) {
 	testBithashClose(t, b)
 }
 
+func TestBithashWriterExccedMax(t *testing.T) {
+	defer os.RemoveAll(testdataDir)
+	os.RemoveAll(testdataDir)
+	b := testOpenBithash()
+	num := 100
+	kvList := testBuildKV(num)
+	bhWriter, err := b.FlushStart()
+	if err != nil {
+		panic(err)
+	}
+	for i := 0; i < num; i++ {
+		item := kvList[i]
+		ik := base.MakeInternalKey(item.k, 0, InternalKeyKindSet)
+		kvList[i].fn, err = bhWriter.Add(ik, item.v)
+		require.NoError(t, err)
+		if i == num-1 {
+			bhWriter.wr.meta.Size = dataMaxSize - 100
+			kvList[i].fn, err = bhWriter.Add(ik, item.v)
+			if err == nil {
+				t.Fatalf("exceed max size not return err")
+			} else {
+				fmt.Println("exceed max size return err", err)
+			}
+		}
+	}
+
+	err = b.FlushFinish(bhWriter)
+	if err != nil {
+		panic(err)
+	}
+	testBithashClose(t, b)
+}
+
 func TestBithashWriterConcurrencyFlush(t *testing.T) {
 	defer os.RemoveAll(testdataDir)
 	os.RemoveAll(testdataDir)

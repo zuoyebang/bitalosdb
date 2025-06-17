@@ -58,19 +58,24 @@ func (i *BitreeIterator) getKV() (*base.InternalKey, []byte) {
 
 	iv := base.DecodeInternalValue(i.iterValue)
 	if iv.Kind() == base.InternalKeyKindSetBithash {
-		if !base.CheckValueValidByKeySetBithash(iv.UserValue) {
-			return nil, nil
-		}
-		fn := binary.LittleEndian.Uint32(iv.UserValue)
-		value, putPool, err := i.btree.bithashGet(i.iterKey.UserKey, fn)
-		if err != nil {
-			return nil, nil
-		}
-
-		i.value = value
-		iv.SetKind(base.InternalKeyKindSet)
-		if putPool != nil {
-			i.putPools = append(i.putPools, putPool)
+		if base.CheckValueValidByKeySetBithash(iv.UserValue) {
+			fn := binary.LittleEndian.Uint32(iv.UserValue)
+			value, putPool, err := i.btree.bithashGet(i.iterKey.UserKey, fn)
+			if err == nil {
+				i.value = value
+				iv.SetKind(base.InternalKeyKindSet)
+				if putPool != nil {
+					i.putPools = append(i.putPools, putPool)
+				}
+			} else {
+				i.btree.opts.Logger.Errorf("[BITPAGE %d] BitreeIterator bithashGet fail key:%v fn:%d err:%v", i.btree.index, i.iterKey.UserKey, fn, err)
+				iv.SetKind(base.InternalKeyKindDelete)
+				i.value = nil
+			}
+		} else {
+			i.btree.opts.Logger.Errorf("[BITPAGE %d] BitreeIterator CheckValueValidByKeySetBithash fail key:%v", i.btree.index, i.iterKey.UserKey)
+			iv.SetKind(base.InternalKeyKindDelete)
+			i.value = nil
 		}
 	} else {
 		i.value = iv.UserValue

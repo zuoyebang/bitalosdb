@@ -272,8 +272,8 @@ func InitDefaultsOptionsPool() *OptionsPool {
 		BitpageBlockCacheSize:          consts.BitpageDefaultBlockCacheSize,
 		BytesPerSync:                   consts.DefaultBytesPerSync,
 		KvSeparateSize:                 consts.KvSeparateSize,
-		BitpageFlushSize:               consts.BitpageFlushSize,
-		BitpageSplitSize:               consts.BitpageSplitSize,
+		BitpageFlushSize:               consts.BitpageDefaultFlushSize,
+		BitpageSplitSize:               consts.BitpageDefaultSplitSize,
 		DbState:                        optspool.DbState,
 		DeleteFilePacer:                NewDefaultDeletionFileLimiter(),
 		KeyHashFunc:                    DefaultKeyHashFunc,
@@ -329,6 +329,7 @@ func InitTestDefaultsOptionsPool() *OptionsPool {
 	optsPool := InitDefaultsOptionsPool()
 	optsPool.BaseOptions.DeleteFilePacer.Run(nil)
 	optsPool.BaseOptions.KeyPrefixDeleteFunc = TestKeyPrefixDeleteFunc
+	optsPool.BaseOptions.KvCheckExpireFunc = TestKvCheckExpireFunc
 	return optsPool
 }
 

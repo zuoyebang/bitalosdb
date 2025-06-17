@@ -17,9 +17,9 @@
 package vfs
 
 import (
+	"errors"
 	"syscall"
 
-	"github.com/cockroachdb/errors"
 	"golang.org/x/sys/unix"
 )
 
