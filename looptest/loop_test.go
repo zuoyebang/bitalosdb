@@ -26,7 +26,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zuoyebang/bitalosdb/internal/errors/oserror"
 	"github.com/stretchr/testify/require"
 	"github.com/zuoyebang/bitalosdb"
 	"github.com/zuoyebang/bitalosdb/internal/consts"
@@ -95,7 +94,7 @@ func openTestBitalosDB(dir string) (*BitalosDB, error) {
 		KeyPrefixDeleteFunc:         options.TestKeyPrefixDeleteFunc,
 	}
 	_, err := os.Stat(dir)
-	if oserror.IsNotExist(err) {
+	if os.IsNotExist(err) {
 		if err = os.MkdirAll(dir, 0775); err != nil {
 			return nil, err
 		}

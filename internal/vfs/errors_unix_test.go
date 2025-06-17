@@ -19,12 +19,11 @@ package vfs
 import (
 	"testing"
 
-	"github.com/zuoyebang/bitalosdb/internal/errors"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )
 
 func TestIsNoSpaceError(t *testing.T) {
-	err := errors.WithStack(unix.ENOSPC)
+	err := unix.ENOSPC
 	require.True(t, IsNoSpaceError(err))
 }
