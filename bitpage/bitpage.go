@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/zuoyebang/bitalosdb/internal/base"
 	"github.com/zuoyebang/bitalosdb/internal/cache/lrucache"
@@ -45,18 +46,20 @@ var (
 )
 
 type Bitpage struct {
-	meta          *bitpagemeta
-	opts          *options.BitpageOptions
-	pages         sync.Map
-	pageWriters   sync.Map
-	splittedPages sync.Map
-	dirname       string
-	index         int
-	stats         *Stats
-	dbState       *statemachine.DbStateMachine
-	cache         *lrucache.LruCache
-	stArena       *arena.Arena
-	stArenaBuf    []byte
+	meta           *bitpagemeta
+	opts           *options.BitpageOptions
+	pages          sync.Map
+	pageWriters    sync.Map
+	splittedPages  sync.Map
+	dirname        string
+	index          int
+	stats          *Stats
+	dbState        *statemachine.DbStateMachine
+	cache          *lrucache.LruCache
+	stArena        *arena.Arena
+	stArenaBuf     []byte
+	BytesFlushed   atomic.Uint64
+	BytesCompacted atomic.Uint64
 }
 
 type SplitPageInfo struct {

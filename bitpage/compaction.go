@@ -191,8 +191,10 @@ func (p *page) runFlush(flushing flushableList, oldSize uint64, logTag string) (
 						return nil, retErr
 					}
 				}
-				if _, err := at.writeItem(iterKey.UserKey, iterValue); err != nil {
+				if n, err := at.writeItem(iterKey.UserKey, iterValue); err != nil {
 					p.bp.opts.Logger.Errorf("%s writeItem fail err:%s", logTag, err)
+				} else {
+					p.bp.BytesCompacted.Add(uint64(n))
 				}
 			}
 
@@ -286,6 +288,7 @@ func (p *page) split(logTag string, pages []*page) (retErr error) {
 		}
 
 		wn, retErr = atCurrent.writeItem(key.UserKey, val)
+		p.bp.BytesCompacted.Add(uint64(wn))
 		if retErr != nil {
 			return
 		}

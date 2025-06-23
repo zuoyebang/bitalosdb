@@ -211,6 +211,14 @@ func openBitower(d *DB, index int) error {
 	return nil
 }
 
+func (s *Bitower) BytesFlushed() uint64 {
+	return s.btree.BytesFlushed()
+}
+
+func (s *Bitower) BytesCompacted() uint64 {
+	return s.btree.BytesCompacted()
+}
+
 func (s *Bitower) replayWAL(filename string, logNum FileNum) (maxSeqNum uint64, err error) {
 	file, err := s.db.opts.FS.Open(filename)
 	if err != nil {

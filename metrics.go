@@ -24,6 +24,15 @@ type MetricsInfo struct {
 	BithashFileTotal   int   `json:"bithash_file_total"`
 	BithashKeyTotal    int   `json:"bithash_key_total"`
 	BithashDelKeyTotal int   `json:"bithash_del_key_total"`
+	BytesFlushed       int
+	BytesCompacted     int
+}
+
+func (s MetricsInfo) WriteAmp() float64 {
+	if s.BytesFlushed == 0 {
+		return 0.0
+	}
+	return (float64(s.BytesFlushed) + float64(s.BytesCompacted)) / float64(s.BytesFlushed)
 }
 
 func (s MetricsInfo) String() string {
@@ -54,6 +63,8 @@ func (d *DB) MetricsInfo() MetricsInfo {
 			stat.BithashKeyTotal += int(bs.KeyTotal.Load())
 			stat.BithashDelKeyTotal += int(bs.DelKeyTotal.Load())
 		}
+		stat.BytesFlushed += int(d.bitowers[i].BytesFlushed())
+		stat.BytesCompacted += int(d.bitowers[i].BytesCompacted())
 	}
 
 	stat.FlushMemTime = d.flushMemTime.Load()

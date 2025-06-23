@@ -58,6 +58,7 @@ func (w *BitreeWriter) set(key base.InternalKey, value []byte, pn bitpage.PageNu
 	case base.InternalKeyKindSet:
 		if w.btree.IsKvSeparate(len(value)) {
 			keyFileNum, err := w.bhashWriter.Add(key.Clone(), value)
+			w.btree.bpage.BytesFlushed.Add(uint64(len(value) + key.Size()))
 			if err != nil {
 				return err
 			}
@@ -70,19 +71,23 @@ func (w *BitreeWriter) set(key base.InternalKey, value []byte, pn bitpage.PageNu
 				binary.LittleEndian.PutUint32(ev[8:12], uint32(keyFileNum))
 				binary.LittleEndian.PutUint64(ev[12:20], tm)
 				err = pageWriter.Set(key, ev[:])
+				w.btree.bpage.BytesFlushed.Add(uint64(key.Size() + len(ev)))
 			} else {
 				var ev [12]byte
 				binary.LittleEndian.PutUint64(ev[0:8], (keySeqNum<<8)|uint64(base.InternalKeyKindSetBithash))
 				binary.LittleEndian.PutUint32(ev[8:12], uint32(keyFileNum))
 				err = pageWriter.Set(key, ev[:])
+				w.btree.bpage.BytesFlushed.Add(uint64(key.Size() + len(ev)))
 			}
 		} else {
 			var ev [8]byte
 			binary.LittleEndian.PutUint64(ev[:], key.Trailer)
 			err = pageWriter.SetMultiValue(key, ev[:], value)
+			w.btree.bpage.BytesFlushed.Add(uint64(key.Size() + len(ev) + len(value)))
 		}
 	case base.InternalKeyKindDelete, base.InternalKeyKindPrefixDelete:
 		err = pageWriter.Set(key, nil)
+		w.btree.bpage.BytesFlushed.Add(uint64(key.Size()))
 	}
 
 	return err

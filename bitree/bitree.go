@@ -126,6 +126,14 @@ func NewBitree(path string, opts *options.BitreeOptions) (*Bitree, error) {
 	return t, nil
 }
 
+func (t *Bitree) BytesFlushed() uint64 {
+	return t.bpage.BytesFlushed.Load()
+}
+
+func (t *Bitree) BytesCompacted() uint64 {
+	return t.bpage.BytesCompacted.Load()
+}
+
 func (t *Bitree) Index() int {
 	return t.index
 }
