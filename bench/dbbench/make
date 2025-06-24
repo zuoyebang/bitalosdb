@@ -1,0 +1,2 @@
+rm -rf main
+CGO_LDFLAGS="-lstdc++ -lm -lz -lbz2 -lsnappy -llz4" GOEXPERIMENT=arenas go build -o main
