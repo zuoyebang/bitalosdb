@@ -40,7 +40,6 @@ func FillFullKey(k []byte, klen, idx int) {
 
 func makeQueryKey(keyIndex int) []byte {
 	keySlice := make([]byte, 18, 18)
-	// if *randKey == 0 {
 	keyStr := strconv.Itoa(keyIndex)
 	lenKeyStr := len(keyStr)
 	if lenKeyStr < 16 {
@@ -55,19 +54,10 @@ func makeQueryKey(keyIndex int) []byte {
 	}
 	FillKeySlot(keySlice)
 	return keySlice
-	// return utils.FuncMakeKey([]byte(fmt.Sprintf("key_%010d", keyIndex)))
-	// } else {
-	// 	return utils.FuncMakeKey(md5Sum([]byte(fmt.Sprintf("key_%d", keyIndex))))
-	// }
 }
 
-func makeValue(keyIndex int, gid int) []byte {
+func makeValue(keyIndex int) []byte {
 	return randValueList[keyIndex%randValueCount]
-	// if *valueSize == 1 {
-	// 	return smallValueList[keyIndex%randValueCount]
-	// } else {
-	// 	return largeValueList[keyIndex%randValueCount]
-	// }
 }
 
 func getIndexFromKey(key []byte) int {
@@ -107,17 +97,6 @@ func writeCgroupCpuConfig(cgroupDir string, cpuNum int) error {
 	}
 	cmd = fmt.Sprintf("echo %d > %s", cpuNum*50000, path.Join(cgroupDir, "cpu.cfs_quota_us"))
 	_, err = exec.Command("bash", "-c", cmd).Output()
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// 写入cgroup配置
-func writeCgroupMemoryConfig(cgroupDir string) error {
-	cgroupPid := os.Getpid()
-	cmd := fmt.Sprintf("echo %d > %s", cgroupPid, path.Join(cgroupDir, "cgroup.procs"))
-	_, err := exec.Command("bash", "-c", cmd).Output()
 	if err != nil {
 		return err
 	}

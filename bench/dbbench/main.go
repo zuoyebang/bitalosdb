@@ -191,7 +191,7 @@ func randomWriteBitalosDBByInt(wg *sync.WaitGroup, writeNum int, randObj *rand.R
 		id := randObj.Int() % (*globalKeyIndexMax)
 		FillFullKey(key[:], len(key), id)
 		newKey = key[:]
-		newValue := makeValue(id, 0)
+		newValue := makeValue(id)
 
 		if i == 0 {
 			fmt.Println("keyLen", len(newKey), "valueLen", len(newValue))
