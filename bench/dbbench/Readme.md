@@ -1,6 +1,6 @@
 # Benchmark
 
-这个benchmark将测试BitalosDB的随机读写性能。
+This benchmark tool will test the random read and write performance of BitalosDB.
 
 ## Build
 
