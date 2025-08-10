@@ -1,0 +1,1 @@
+GOEXPERIMENT=arenas go build -o main
