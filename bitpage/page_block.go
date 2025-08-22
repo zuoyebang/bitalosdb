@@ -50,12 +50,6 @@ type pbHeader struct {
 	intIndexOffset uint32
 }
 
-/*var pbPool = sync.Pool{
-	New: func() interface{} {
-		return &pageBlock{}
-	},
-}*/
-
 func newPageBlock(version uint16, blockSize uint32) *pageBlock {
 	pb := &pageBlock{
 		itemsOffset:   make([]uint32, 0, 1<<8),
@@ -444,7 +438,7 @@ func (p *pageBlock) allocBuf(sz uint32) uint32 {
 }
 
 func (p *pageBlock) bytes() []byte {
-	return p.data
+	return p.data[:p.size]
 }
 
 func (p *pageBlock) inuseBytes() uint32 {
