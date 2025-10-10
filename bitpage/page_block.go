@@ -184,9 +184,10 @@ func (p *pageBlock) writeItemDefault(key, value []byte) uint32 {
 
 func (p *pageBlock) writeItemPrefixCompress(key, value []byte) uint32 {
 	if p.prevKey == nil && p.prevValue == nil {
-		p.prevKey = make([]byte, 0, 1<<7)
+		p.prevKey = make([]byte, 0, 128)
 		p.prevKey = append(p.prevKey[:0], key...)
-		p.prevValue = value
+		p.prevValue = make([]byte, 0, 256)
+		p.prevValue = append(p.prevValue[:0], value...)
 		p.prevHasShared = false
 		p.sharedKey = make([]byte, 0, 1<<6)
 		return 0
@@ -227,7 +228,7 @@ func (p *pageBlock) writeItemPrefixCompress(key, value []byte) uint32 {
 	sz := p.writeSharedInternal(shared)
 
 	p.prevKey = append(p.prevKey[:0], key...)
-	p.prevValue = value
+	p.prevValue = append(p.prevValue[:0], value...)
 	if shared >= itemSharedMinLength {
 		p.prevHasShared = true
 	} else {
