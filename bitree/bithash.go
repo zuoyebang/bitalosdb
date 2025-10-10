@@ -200,12 +200,6 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 				delFnMap[fn] = true
 			}
 
-			if t.opts.KvCheckExpire(ik.UserKey, v) {
-				delKeyNum++
-				expireKeyNum++
-				continue
-			}
-
 			khash := hash.Crc32(ik.UserKey)
 			if !findKey(ik, khash) {
 				delKeyNum++
