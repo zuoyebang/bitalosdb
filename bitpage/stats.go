@@ -33,7 +33,5 @@ func (s *Stats) Reset() {
 }
 
 func (s *Stats) String() string {
-	return fmt.Sprintf("size:%v",
-		s.Size,
-	)
+	return fmt.Sprintf("size:%v", s.Size)
 }

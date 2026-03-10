@@ -20,7 +20,7 @@ package lrucache
 import (
 	"unsafe"
 
-	"github.com/zuoyebang/bitalosdb/internal/manual"
+	"github.com/zuoyebang/bitalosdb/v2/internal/manual"
 )
 
 const valueSize = int(unsafe.Sizeof(Value{}))

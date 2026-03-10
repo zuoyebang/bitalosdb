@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/zuoyebang/bitalosdb/internal/consts"
-	"github.com/zuoyebang/bitalosdb/internal/errors"
+	"github.com/zuoyebang/bitalosdb/v2/internal/consts"
+	"github.com/zuoyebang/bitalosdb/v2/internal/errors"
 )
 
 const (
@@ -202,7 +202,7 @@ func (b *Bucket) DeleteBucket(key []byte) error {
 	err := child.ForEach(func(k, v []byte) error {
 		if _, _, childFlags := child.Cursor().seek(k); (childFlags & bucketLeafFlag) != 0 {
 			if err := child.DeleteBucket(k); err != nil {
-				return errors.Wrapf(err, "delete bucket err")
+				return errors.Errorf("delete bucket err:%s", err)
 			}
 		}
 		return nil
@@ -453,10 +453,10 @@ func (b *Bucket) spill() error {
 		var c = b.Cursor()
 		k, _, flags := c.seek([]byte(name))
 		if !bytes.Equal([]byte(name), k) {
-			panic(fmt.Sprintf("misplaced bucket header: %x -> %x", []byte(name), k))
+			panic(errors.Errorf("misplaced bucket header: %x -> %x", []byte(name), k))
 		}
 		if flags&bucketLeafFlag == 0 {
-			panic(fmt.Sprintf("unexpected bucket header flag: %x", flags))
+			panic(errors.Errorf("unexpected bucket header flag: %x", flags))
 		}
 		c.node().put([]byte(name), []byte(name), value, 0, bucketLeafFlag)
 	}

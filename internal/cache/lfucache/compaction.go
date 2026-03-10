@@ -20,9 +20,9 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/zuoyebang/bitalosdb/internal/cache/lfucache/internal/arenaskl"
-	"github.com/zuoyebang/bitalosdb/internal/humanize"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
+	"github.com/zuoyebang/bitalosdb/v2/internal/cache/lfucache/internal/arenaskl"
+	"github.com/zuoyebang/bitalosdb/v2/internal/humanize"
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
 )
 
 const (

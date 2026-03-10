@@ -17,8 +17,6 @@ package humanize
 import (
 	"fmt"
 	"math"
-
-	"github.com/cockroachdb/redact"
 )
 
 func logn(n, b float64) float64 {
@@ -45,9 +43,9 @@ type config struct {
 	suffix []string
 }
 
-var IEC = config{1024, []string{" B", " K", " M", " G", " T", " P", " E"}}
+var IEC = config{1024, []string{" B", " KB", " MB", " GB", " TB", " PB", " EB"}}
 
-var SI = config{1000, []string{"", " K", " M", " G", " T", " P", " E"}}
+var SI = config{1000, []string{"", " KB", " MB", " GB", " TB", " PB", " EB"}}
 
 func (c *config) Int64(s int64) FormattedString {
 	if s < 0 {
@@ -69,9 +67,5 @@ func Uint64(s uint64) FormattedString {
 }
 
 type FormattedString string
-
-var _ redact.SafeValue = FormattedString("")
-
-func (fs FormattedString) SafeValue() {}
 
 func (fs FormattedString) String() string { return string(fs) }

@@ -16,78 +16,166 @@ package bitpage
 
 import (
 	"bytes"
+
+	"github.com/zuoyebang/bitalosdb/v2/internal/kkv"
 )
 
+func (s *superTable) newIter(opts *iterOptions) InternalKKVIterator {
+	indexes := s.readIndexes()
+	if indexes == nil {
+		return nil
+	}
+
+	if opts == nil {
+		opts = &iterOptions{}
+	}
+
+	it := &superTableIterator{
+		st:          s,
+		indexes:     s.readIndexes(),
+		isUseVi:     s.isUseVi,
+		isSeekFirst: kkv.IsUseIterFirst(opts.DataType),
+		oiStartPos:  0,
+		oiEndPos:    indexes.oiNum - 1,
+	}
+
+	if opts.IsTest {
+		it.SetBounds(opts.LowerBound, opts.UpperBound)
+	}
+
+	return it
+}
+
 type superTableIterator struct {
-	st        *superTable
-	indexes   stIndexes
-	indexPos  int
-	iterKey   internalKey
-	iterValue []byte
+	st          *superTable
+	indexes     *stIndexes
+	indexPos    int
+	isUseVi     bool
+	isSeekFirst bool
+	oiStartPos  int
+	oiEndPos    int
+	lower       []byte
+	upper       []byte
 }
 
-func (i *superTableIterator) findItem() (*internalKey, []byte) {
-	if i.indexPos < 0 || i.indexPos >= len(i.indexes) {
+var _ InternalKKVIterator = (*superTableIterator)(nil)
+
+func (i *superTableIterator) findItem() (*InternalKKVKey, []byte) {
+	if i.indexPos < i.oiStartPos || i.indexPos > i.oiEndPos {
 		return nil, nil
 	}
 
-	ikey, value := i.st.getItem(i.indexes[i.indexPos])
-	if ikey.UserKey == nil {
+	offset := i.indexes.oi[i.indexPos]
+	key, value := i.st.dataFile.GetKV(offset)
+	if key == nil {
 		return nil, nil
 	}
 
-	i.iterKey = ikey
-	i.iterValue = value
-	return &i.iterKey, i.iterValue
+	ikey := kkv.DecodeInternalKey(key)
+	return &ikey, value
 }
 
-func (i *superTableIterator) First() (*internalKey, []byte) {
-	i.indexPos = 0
-	return i.findItem()
+func (i *superTableIterator) seekOffsetIndex(key []byte, num int) bool {
+	pos := binarySearch(num, func(j int) int {
+		offset := i.indexes.oi[i.oiStartPos+j]
+		ikey := i.st.getKey(offset)
+		return bytes.Compare(ikey.UserKey, key)
+	})
+	if pos == num {
+		return false
+	}
+	i.indexPos = i.oiStartPos + pos
+	return true
 }
 
-func (i *superTableIterator) Next() (*internalKey, []byte) {
+func (i *superTableIterator) seekVersionIndex(seek []byte) (int, bool) {
+	if !i.isUseVi {
+		return i.indexes.oiNum, true
+	}
+
+	startPos, endPos, found := i.st.findKeyInVersionIndex(i.indexes, seek)
+	if !found {
+		return 0, false
+	}
+
+	i.oiStartPos = startPos
+	i.oiEndPos = endPos
+	oiNum := i.oiEndPos - i.oiStartPos + 1
+	return oiNum, true
+}
+
+func (i *superTableIterator) First() (*InternalKKVKey, []byte) {
+	i.indexPos = i.oiStartPos
+	key, value := i.findItem()
+	if kkv.IsUserKeyGEUpperBound(key, i.upper) {
+		return nil, nil
+	}
+	return key, value
+}
+
+func (i *superTableIterator) Next() (*InternalKKVKey, []byte) {
 	i.indexPos++
-	return i.findItem()
+	key, value := i.findItem()
+	if kkv.IsUserKeyGEUpperBound(key, i.upper) {
+		return nil, nil
+	}
+	return key, value
 }
 
-func (i *superTableIterator) Prev() (*internalKey, []byte) {
+func (i *superTableIterator) Prev() (*InternalKKVKey, []byte) {
 	i.indexPos--
-	return i.findItem()
+	key, value := i.findItem()
+	if kkv.IsUserKeyLTLowerBound(key, i.lower) {
+		return nil, nil
+	}
+	return key, value
 }
 
-func (i *superTableIterator) Last() (*internalKey, []byte) {
-	i.indexPos = len(i.indexes) - 1
-	return i.findItem()
+func (i *superTableIterator) Last() (*InternalKKVKey, []byte) {
+	i.indexPos = i.oiEndPos
+	key, value := i.findItem()
+	if kkv.IsUserKeyLTLowerBound(key, i.lower) {
+		return nil, nil
+	}
+	return key, value
 }
 
-func (i *superTableIterator) SeekGE(key []byte) (*internalKey, []byte) {
-	i.indexPos = i.st.findKeyIndexPos(i.indexes, key)
-	return i.findItem()
+func (i *superTableIterator) SeekGE(seek []byte) (*InternalKKVKey, []byte) {
+	num, found := i.seekVersionIndex(seek)
+	if !found {
+		return nil, nil
+	}
+
+	if i.isSeekFirst && !i.st.isUseMiniVi {
+		i.indexPos = i.oiStartPos
+	} else if !i.seekOffsetIndex(seek, num) {
+		return nil, nil
+	}
+
+	key, value := i.findItem()
+	if kkv.IsUserKeyGEUpperBound(key, i.upper) {
+		return nil, nil
+	}
+
+	return key, value
 }
 
-func (i *superTableIterator) SeekLT(key []byte) (*internalKey, []byte) {
-	i.indexPos = i.st.findKeyIndexPos(i.indexes, key)
-	poskey, _ := i.findItem()
-	if poskey != nil {
+func (i *superTableIterator) SeekLT(seek []byte) (*InternalKKVKey, []byte) {
+	num, found := i.seekVersionIndex(seek)
+	if !found {
+		return nil, nil
+	}
+
+	if i.seekOffsetIndex(seek, num) {
 		return i.Prev()
+	} else {
+		return i.Last()
 	}
-
-	lastKey, lastValue := i.Last()
-	if lastKey != nil && bytes.Compare(lastKey.UserKey, key) < 0 {
-		return lastKey, lastValue
-	}
-	return nil, nil
-
-}
-
-func (i *superTableIterator) SeekPrefixGE(
-	prefix, key []byte, trySeekUsingNext bool,
-) (ikey *internalKey, value []byte) {
-	return i.SeekGE(key)
 }
 
 func (i *superTableIterator) SetBounds(lower, upper []byte) {
+	i.lower = lower
+	i.upper = upper
 }
 
 func (i *superTableIterator) Error() error {

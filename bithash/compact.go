@@ -23,9 +23,8 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/os2"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
+	"github.com/zuoyebang/bitalosdb/v2/internal/os2"
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
 )
 
 const (
@@ -43,16 +42,13 @@ const (
 	compactLogWriteOffset = 0
 	compactLogReadOffset  = 8
 	compactLogDataOffset  = compactLogHeaderLen
+
+	compactMaxMiniSize = 5 << 20
 )
 
 const (
 	compactLogKindSet uint16 = 1 + iota
 	compactLogKindDelete
-)
-
-const (
-	compactMaxFileNum  = 8
-	compactMaxMiniSize = 50 << 20
 )
 
 type CompactFiles struct {
@@ -63,7 +59,6 @@ type CompactFiles struct {
 
 func (b *Bithash) CheckFilesDelPercent(cfgPercent float64) []CompactFiles {
 	var compactFiles []CompactFiles
-	var findNum int
 
 	b.meta.mu.RLock()
 	defer b.meta.mu.RUnlock()
@@ -79,14 +74,10 @@ func (b *Bithash) CheckFilesDelPercent(cfgPercent float64) []CompactFiles {
 			compactFiles = append(compactFiles, CompactFiles{
 				FileNum:    fn,
 				DelPercent: delPercent,
-				Size:       b.fileSize(fn),
+				Size:       fileSize,
 			})
 			b.logger.Infof("[COMPACTBITHASH %d] checkFilesDelPercent %s delPercent:%.4f cfgPercent:%.2f fileSize:%s",
 				b.index, fileMeta, delPercent, cfgPercent, utils.FmtSize(fileSize))
-			findNum++
-			if findNum >= compactMaxFileNum {
-				break
-			}
 		}
 	}
 
@@ -163,12 +154,11 @@ func initCompactLog(b *Bithash) (err error) {
 		return err
 	}
 
-	b.logger.Infof("[BITHASH %d] open compactLog file filename:%s writeOffset:%d readOffset:%d",
-		b.index, base.GetFilePathBase(filename), w.writeOffset, w.readOffset)
+	//b.logger.Infof("[BITHASH %d] open compactLog file filename:%s writeOffset:%d readOffset:%d",
+	//	b.index, base.GetFilePathBase(filename), w.writeOffset, w.readOffset)
 
 	b.cLogWriter = w
 
-	// 重放未读的log日志
 	if err = b.cLogWriter.replayLog(); err != nil {
 		return err
 	}
@@ -270,32 +260,32 @@ func (w *compactLogWriter) close() (err error) {
 	return
 }
 
-func initFileNumMap(b *Bithash) (err error) {
+func initFileNumMap(b *Bithash) error {
 	filename := MakeFilepath(b.fs, b.dirname, fileTypeFileNumMap, 0)
 	if os2.IsNotExist(filename) {
-		if err = createFileNumMapFile(b, filename); err != nil {
+		if err := createFileNumMapFile(b, filename); err != nil {
 			return err
 		}
 	}
 
-	if err = readFileNumMapFile(b, filename); err != nil {
+	if err := readFileNumMapFile(b, filename); err != nil {
 		return err
 	}
 
-	if err = initCompactLog(b); err != nil {
+	if err := initCompactLog(b); err != nil {
 		return err
 	}
 
-	if err = writeFileNumMapFile(b); err != nil {
+	if err := writeFileNumMapFile(b); err != nil {
 		return err
 	}
 
-	if err = b.cLogWriter.reset(); err != nil {
+	if err := b.cLogWriter.reset(); err != nil {
 		return err
 	}
 
-	b.logger.Infof("[BITHASH %d] initFileNumMap success compactLog readOffset:%d writeOffset:%d",
-		b.index, b.cLogWriter.readOffset, b.cLogWriter.writeOffset)
+	//b.logger.Infof("[BITHASH %d] initFileNumMap success compactLog readOffset:%d writeOffset:%d",
+	//	b.index, b.cLogWriter.readOffset, b.cLogWriter.writeOffset)
 
 	return nil
 }

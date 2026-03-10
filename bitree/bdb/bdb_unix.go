@@ -21,7 +21,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/zuoyebang/bitalosdb/internal/errors"
+	"github.com/zuoyebang/bitalosdb/v2/internal/errors"
 	"golang.org/x/sys/unix"
 )
 
@@ -65,7 +65,7 @@ func mmap(db *DB, sz int) error {
 
 	err = unix.Madvise(b, syscall.MADV_RANDOM)
 	if err != nil && err != syscall.ENOSYS {
-		return errors.Wrapf(err, "madvise err")
+		return errors.Errorf("madvise err:%s", err)
 	}
 
 	db.dataref = b

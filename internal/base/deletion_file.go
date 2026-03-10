@@ -20,7 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/zuoyebang/bitalosdb/internal/list2"
+	"github.com/zuoyebang/bitalosdb/v2/internal/list2"
 )
 
 type DFLOption struct {
@@ -44,7 +44,7 @@ type DeletionFileLimiter struct {
 
 func NewDeletionFileLimiter(opts *DFLOption) *DeletionFileLimiter {
 	l := &DeletionFileLimiter{
-		recvCh: make(chan []string, 2048),
+		recvCh: make(chan []string, 4096),
 		exitCh: make(chan struct{}),
 		opts:   opts,
 	}
@@ -66,24 +66,20 @@ func (d *DeletionFileLimiter) Run(opts *DFLOption) {
 		d.opts.Logger.Info("[DELETELIMITER] produce running...")
 
 		for {
-			select {
-			case <-d.exitCh:
+			files, ok := <-d.recvCh
+			if !ok || files == nil {
 				return
-			case files := <-d.recvCh:
-				if d.isClosed() {
-					return
-				}
-
-				d.pushFiles(files)
 			}
+			d.pushFiles(files)
 		}
 	}()
 
 	go func() {
 		defer d.exitWg.Done()
 
-		duration := time.Duration(d.opts.DeleteInterval) * time.Second
-		d.opts.Logger.Infof("[DELETELIMITER] consume running interval:%s", duration)
+		interval := d.opts.DeleteInterval
+		d.opts.Logger.Infof("[DELETELIMITER] consume running interval:%dms", interval)
+		duration := time.Duration(interval) * time.Millisecond
 		t := time.NewTimer(duration)
 		defer t.Stop()
 
@@ -107,7 +103,7 @@ func (d *DeletionFileLimiter) Run(opts *DFLOption) {
 }
 
 func (d *DeletionFileLimiter) AddFile(file string) {
-	if d.isClosed() {
+	if len(file) == 0 || d.isClosed() {
 		return
 	}
 
@@ -115,7 +111,7 @@ func (d *DeletionFileLimiter) AddFile(file string) {
 }
 
 func (d *DeletionFileLimiter) AddFiles(files []string) {
-	if d.isClosed() {
+	if len(files) == 0 || d.isClosed() {
 		return
 	}
 
@@ -137,12 +133,12 @@ func (d *DeletionFileLimiter) Close() {
 		return
 	}
 
-	d.opts.Logger.Infof("[DELETELIMITER] closed start fileListLen:%d", d.fileList.l.Len())
-
 	d.closed.Store(true)
 	close(d.exitCh)
+	d.recvCh <- nil
 	d.exitWg.Wait()
 
+	d.opts.Logger.Infof("[DELETELIMITER] closed start fileListLen:%d", d.fileList.l.Len())
 	for !d.fileList.l.Empty() {
 		d.deleteFile()
 	}
@@ -187,13 +183,13 @@ func (d *DeletionFileLimiter) popFile() (string, bool) {
 
 func (d *DeletionFileLimiter) deleteFile() {
 	path, ok := d.popFile()
-	if !ok || path == "" {
+	if !ok || len(path) == 0 {
 		return
 	}
 
 	filename := GetFilePathBase(path)
 	if err := os.Remove(path); err != nil {
-		d.opts.Logger.Errorf("[DELETELIMITER] delete fail file:%s err:%s", filename, err.Error())
+		d.opts.Logger.Errorf("[DELETELIMITER] delete fail file:%s err:%s", filename, err)
 	} else {
 		d.opts.Logger.Infof("[DELETELIMITER] delete success file:%s", filename)
 	}

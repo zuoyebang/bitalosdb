@@ -1,6 +1,3 @@
-//go:build !windows
-// +build !windows
-
 // Copyright 2019-2024 Xu Ruibo (hustxurb@163.com) and Contributors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !windows
+
 package bdb_test
 
 import (
 	"fmt"
 	"testing"
 
-	"github.com/zuoyebang/bitalosdb/bitree/bdb"
-	"github.com/zuoyebang/bitalosdb/internal/options"
+	"github.com/zuoyebang/bitalosdb/v2/bitree/bdb"
+	"github.com/zuoyebang/bitalosdb/v2/internal/options"
 
 	"golang.org/x/sys/unix"
 )

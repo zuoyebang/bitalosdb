@@ -15,29 +15,35 @@
 package bitree
 
 import (
+	"encoding/binary"
 	"fmt"
 	"time"
 
-	"github.com/zuoyebang/bitalosdb/bithash"
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/consts"
-	"github.com/zuoyebang/bitalosdb/internal/hash"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
+	"github.com/zuoyebang/bitalosdb/v2/bithash"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/hash"
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
 )
 
-var (
-	bithashCompactLowerSize = int64(consts.BithashTableMaxSize)
-	bithashCompactUpperSize = bithashCompactLowerSize * 2
-	bithashCompactMiniSize  = int64(consts.BithashTableMaxSize - 1<<20)
-)
+const bithashCompactBigSize = 1 << 30
+
+func (t *Bitree) bithashOpen() error {
+	var err error
+	t.bhashOpen.Do(func() {
+		if t.bhash == nil {
+			t.opts.BithashOpts.Index = t.index
+			t.bhash, err = bithash.Open(t.bhashPath, t.opts.BithashOpts)
+		}
+	})
+	return err
+}
 
 func (t *Bitree) bithashGetByHash(key []byte, khash uint32, fn uint32) ([]byte, func(), error) {
 	return t.bhash.Get(key, khash, bithash.FileNum(fn))
 }
 
 func (t *Bitree) bithashGet(key []byte, fn uint32) ([]byte, func(), error) {
-	khash := hash.Crc32(key)
-	return t.bhash.Get(key, khash, bithash.FileNum(fn))
+	return t.bhash.Get(key, hash.Fnv32(key), bithash.FileNum(fn))
 }
 
 func (t *Bitree) bithashDelete(fn uint32) error {
@@ -48,6 +54,11 @@ func (t *Bitree) bithashDelete(fn uint32) error {
 	return t.bhash.Delete(bithash.FileNum(fn))
 }
 
+func (t *Bitree) BithashGetEncode(key, value []byte) ([]byte, func(), error) {
+	fn := binary.LittleEndian.Uint32(value)
+	return t.bithashGet(key, fn)
+}
+
 func (t *Bitree) BithashStats() *bithash.Stats {
 	if t.bhash == nil {
 		return nil
@@ -55,11 +66,11 @@ func (t *Bitree) BithashStats() *bithash.Stats {
 	return t.bhash.Stats()
 }
 
-func (t *Bitree) BithashDebugInfo(dataType string) string {
+func (t *Bitree) BithashDebugInfo() string {
 	if t.bhash == nil {
 		return ""
 	}
-	return t.bhash.DebugInfo(dataType)
+	return t.bhash.DebugInfo()
 }
 
 func (t *Bitree) CompactBithash(deletePercent float64) {
@@ -85,19 +96,25 @@ func (t *Bitree) CompactBithash(deletePercent float64) {
 		}
 	}
 
+	compactBigFileNums := make(map[bithash.FileNum]int64)
 	delFiles := t.bhash.CheckFilesDelPercent(deletePercent)
 	if len(delFiles) > 0 {
 		for _, file := range delFiles {
-			if file.DelPercent >= 1 {
-				remainPercent = 1
-			} else {
+			if file.Size >= bithashCompactBigSize {
+				compactBigFileNums[file.FileNum] = file.Size
+				continue
+			}
+
+			if file.DelPercent < 1 {
 				remainPercent = 1 - file.DelPercent
+			} else {
+				remainPercent = 1
 			}
 			fileReserveSize := int64(float64(file.Size) * remainPercent)
 			reserveSize += fileReserveSize
-			if reserveSize < bithashCompactLowerSize {
+			if reserveSize < t.bithashCompactLowerSize {
 				compactFileNums = append(compactFileNums, file.FileNum)
-			} else if reserveSize < bithashCompactUpperSize {
+			} else if reserveSize < t.bithashCompactUpperSize {
 				compactFileNums = append(compactFileNums, file.FileNum)
 				compactBithash(compactFileNums, reserveSize)
 				reserveSize = 0
@@ -109,9 +126,13 @@ func (t *Bitree) CompactBithash(deletePercent float64) {
 				compactFileNums = append(compactFileNums, file.FileNum)
 			}
 		}
+		compactBithash(compactFileNums, reserveSize)
 
-		if len(compactFileNums) > 0 {
-			compactBithash(compactFileNums, reserveSize)
+		for fn, fileSize := range compactBigFileNums {
+			t.opts.Logger.Infof("%s big start fn:%d fileSize:%s", logTag, fn, utils.FmtSize(fileSize))
+			if err := t.compactBithashFiles([]bithash.FileNum{fn}, logTag); err != nil {
+				t.opts.Logger.Errorf("%s fail err:%s", logTag, err)
+			}
 		}
 	}
 
@@ -125,7 +146,7 @@ func (t *Bitree) CompactBithash(deletePercent float64) {
 				reserveSize += file.Size
 			}
 			compactFileNums = append(compactFileNums, file.FileNum)
-			if reserveSize > bithashCompactMiniSize || (i == miniFilesNum-1 && len(compactFileNums) > 1) {
+			if reserveSize > t.bithashCompactMiniSize || (i == miniFilesNum-1 && len(compactFileNums) > 1) {
 				compactBithash(compactFileNums, reserveSize)
 				reserveSize = 0
 				compactFileNums = compactFileNums[:0]
@@ -135,8 +156,8 @@ func (t *Bitree) CompactBithash(deletePercent float64) {
 }
 
 func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) error {
-	t.dbState.LockTask()
-	defer t.dbState.UnlockTask()
+	t.opts.DbState.RLockTask()
+	defer t.opts.DbState.RUnlockTask()
 
 	bw, err := t.bhash.NewBithashWriter(true)
 	if err != nil {
@@ -155,8 +176,8 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 
 	var obsoleteFileNums []bithash.FileNum
 	var delKeyTotal int
-	mgFnMap := make(map[bithash.FileNum]bool, 1<<8)
-	delFnMap := make(map[bithash.FileNum]bool, 1<<8)
+	mgFnMap := make(map[bithash.FileNum]bool, 256)
+	delFnMap := make(map[bithash.FileNum]bool, 256)
 
 	compactFile := func(srcFn bithash.FileNum) (e error) {
 		var iter *bithash.TableIterator
@@ -170,27 +191,27 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 		}
 		defer func() {
 			if err2 := iter.Close(); err2 != nil {
-				t.opts.Logger.Errorf("%s close iter panic err:%s", logTag, err2)
+				t.opts.Logger.Errorf("%s close iter err:%s", logTag, err2)
 			}
 
 			if e == nil {
 				if delKeyNum > 0 {
 					delKeyTotal += delKeyNum
 				}
-				t.opts.Logger.Infof("%s file %d to %d done iterKeyNum:%d mgKeyNum:%d delKeyNum:%d expireKeyNum:%d cost:%.4f",
+				t.opts.Logger.Infof("%s compactFile %d to %d done iterKeyNum:%d mgKeyNum:%d delKeyNum:%d expireKeyNum:%d cost:%.4f",
 					logTag, srcFn, dstFn, iterKeyNum, mgKeyNum, delKeyNum, expireKeyNum, time.Since(start).Seconds())
 			}
 		}()
 
-		findKey := func(iterKey *base.InternalKey, khash uint32) bool {
+		findKey := func(iterKey *internalKey, khash uint32) bool {
 			v, vexist, vcloser := t.getInternal(iterKey.UserKey, khash)
 			if !vexist {
 				return false
 			}
 			defer vcloser()
 
-			dv := base.DecodeInternalValue(v)
-			return iterKey.SeqNum() == dv.SeqNum()
+			isSeparate, _, dv := base.DecodeInternalValue(v)
+			return isSeparate && iterKey.SeqNum() == dv.SeqNum()
 		}
 
 		for ik, v, fn := iter.First(); iter.Valid(); ik, v, fn = iter.Next() {
@@ -200,7 +221,7 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 				delFnMap[fn] = true
 			}
 
-			khash := hash.Crc32(ik.UserKey)
+			khash := hash.Fnv32(ik.UserKey)
 			if !findKey(ik, khash) {
 				delKeyNum++
 				continue
@@ -217,7 +238,8 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 			mgKeyNum++
 		}
 
-		if e = iter.Error(); e != nil {
+		e = iter.Error()
+		if e != nil {
 			return
 		}
 
@@ -232,7 +254,7 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 
 	for _, compactFn := range fileNums {
 		if err = compactFile(compactFn); err != nil {
-			t.opts.Logger.Errorf("%s file %d to %d fail err:%s", logTag, compactFn, dstFn, err)
+			t.opts.Logger.Errorf("%s file %d to %d fail panic err:%s", logTag, compactFn, dstFn, err)
 			return err
 		}
 
@@ -264,7 +286,7 @@ func (t *Bitree) compactBithashFiles(fileNums []bithash.FileNum, logTag string) 
 		}
 	}
 
-	t.opts.Logger.Infof("%s files %v to %d success delKey:%d delKeyTotalOld:%d delKeyTotalNew:%d",
+	t.opts.Logger.Infof("%s compact %v to %d success delKey:%d delKeyTotalOld:%d delKeyTotalNew:%d",
 		logTag, obsoleteFileNums, dstFn, delKeyTotal, delKeyTotalOld, int(t.bhash.StatsGetDelKeyTotal()))
 
 	return nil

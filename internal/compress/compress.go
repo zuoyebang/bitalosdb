@@ -25,6 +25,7 @@ const (
 
 type Compressor interface {
 	Encode(dst, src []byte) []byte
+	EncodeOptimal(dst, src []byte) ([]byte, bool)
 	Decode(dst, src []byte) ([]byte, error)
 	Type() int
 }
@@ -49,6 +50,10 @@ func (c noCompressor) Encode(dst, src []byte) []byte {
 	return src
 }
 
+func (c noCompressor) EncodeOptimal(dst, src []byte) ([]byte, bool) {
+	return src, false
+}
+
 func (c noCompressor) Decode(dst, src []byte) ([]byte, error) {
 	return src, nil
 }
@@ -61,6 +66,18 @@ type snappyCompressor struct{}
 
 func (sc snappyCompressor) Encode(dst, src []byte) []byte {
 	return snappy.Encode(dst, src)
+}
+
+func (sc snappyCompressor) EncodeOptimal(dst, src []byte) ([]byte, bool) {
+	srcLen := len(src)
+	if srcLen >= 56 {
+		compressed := snappy.Encode(dst, src)
+		if float64(len(compressed))/float64(srcLen) <= 0.92 {
+			return compressed, true
+		}
+	}
+
+	return src, false
 }
 
 func (sc snappyCompressor) Decode(dst, src []byte) ([]byte, error) {

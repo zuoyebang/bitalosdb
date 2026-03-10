@@ -18,9 +18,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/zuoyebang/bitalosdb/internal/errors"
-	"github.com/zuoyebang/bitalosdb/internal/os2"
-	"github.com/zuoyebang/bitalosdb/internal/vfs"
+	"github.com/zuoyebang/bitalosdb/v2/internal/errors"
+	"github.com/zuoyebang/bitalosdb/v2/internal/os2"
+	"github.com/zuoyebang/bitalosdb/v2/internal/vfs"
 )
 
 func (b *Bithash) Checkpoint(fs vfs.FS, destDir string) (err error) {

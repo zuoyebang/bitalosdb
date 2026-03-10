@@ -21,8 +21,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
 	"github.com/stretchr/testify/require"
-	"github.com/zuoyebang/bitalosdb/internal/base"
 )
 
 func TestBlockIter(t *testing.T) {

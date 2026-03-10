@@ -14,12 +14,31 @@
 
 package base
 
-import "github.com/zuoyebang/bitalosdb/internal/errors"
+import "errors"
 
-var ErrNotFound = errors.New("bitalosdb: not found")
+var (
+	ErrNotFound                 = errors.New("bitalosdb: not found")
+	ErrFileFull                 = errors.New("bitalosdb: panic vt file full")
+	ErrWrongType                = errors.New("WRONGTYPE Operation against a key holding the wrong kind of value")
+	ErrTableOpenType            = errors.New("tbl open type not support")
+	ErrTableFull                = errors.New("allocation failed because table is full")
+	ErrIndexOutOfRange          = errors.New("ERR index out of range")
+	ErrNoSuchKey                = errors.New("ERR no such key")
+	ErrRecordExists             = errors.New("record with this key already exists")
+	ErrVTBusy                   = errors.New("bitalosdb: vector table busy")
+	ErrVTFull                   = errors.New("bitalosdb: panic rehash failed vector table full")
+	ErrMemTableExceedDelPercent = errors.New("memtable exceed delpercent")
+	ErrPageNotFound             = errors.New("page not exist")
+	ErrPageSplitted             = errors.New("page splitted")
+	ErrPageNotFreed             = errors.New("page not freed")
+	ErrPageFlushState           = errors.New("page flush state err")
+	ErrPageFlushEmpty           = errors.New("page flush empty")
+)
 
-var ErrCorruption = errors.New("bitalosdb: corruption")
-
-func CorruptionErrorf(format string, args ...interface{}) error {
-	return errors.Wrapf(ErrCorruption, format, args...)
+func DisableErrNotFound(err error) error {
+	if err == ErrNotFound {
+		return nil
+	} else {
+		return err
+	}
 }

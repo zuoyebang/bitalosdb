@@ -22,8 +22,8 @@ import (
 	"os/exec"
 	"testing"
 
+	"github.com/zuoyebang/bitalosdb/v2/internal/vfs"
 	"github.com/stretchr/testify/require"
-	"github.com/zuoyebang/bitalosdb/internal/vfs"
 )
 
 var lockFilename = flag.String("lockfile", "", "File to lock. A non-empty value implies a child process.")

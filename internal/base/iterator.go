@@ -18,7 +18,6 @@ import "fmt"
 
 type InternalIterator interface {
 	SeekGE(key []byte) (*InternalKey, []byte)
-	SeekPrefixGE(prefix, key []byte, trySeekUsingNext bool) (*InternalKey, []byte)
 	SeekLT(key []byte) (*InternalKey, []byte)
 	First() (*InternalKey, []byte)
 	Last() (*InternalKey, []byte)
@@ -28,4 +27,15 @@ type InternalIterator interface {
 	Close() error
 	SetBounds(lower, upper []byte)
 	fmt.Stringer
+}
+
+type VectorTableIterator interface {
+	First() (key []byte, h, l, seqNum uint64, dataType uint8, timestamp, version uint64,
+		slotId uint16, size uint32, pre, next uint64, value []byte, final bool)
+	Next() (key []byte, h, l, seqNum uint64, dataType uint8, timestamp uint64, version uint64,
+		slotId uint16, size uint32, pre, next uint64, value []byte, final bool)
+	SeekCursor(g, s uint32) (key []byte, h, l, seqNum uint64, dataType uint8, timestamp uint64, version uint64,
+		slotId uint16, size uint32, pre, next uint64, value []byte, final bool)
+	GetCursor() (uint32, uint32, bool)
+	Close() error
 }

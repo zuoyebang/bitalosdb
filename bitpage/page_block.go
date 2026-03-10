@@ -31,17 +31,17 @@ var (
 )
 
 type pageBlock struct {
-	header        pbHeader
-	itemsOffset   []uint32
-	data          []byte
-	intIndex      []byte
-	size          uint32
-	num           int
-	prevKey       []byte
-	prevValue     []byte
-	prevHasShared bool
-	sharedKey     []byte
-	sharedNum     int
+	header          pbHeader
+	itemsOffset     []uint32
+	data            []byte
+	intIndex        []byte
+	size            uint32
+	num             int
+	prevKey         []byte
+	prevValueOffset uint32
+	prevHasShared   bool
+	sharedKey       []byte
+	sharedNum       int
 }
 
 type pbHeader struct {
@@ -52,15 +52,15 @@ type pbHeader struct {
 
 func newPageBlock(version uint16, blockSize uint32) *pageBlock {
 	pb := &pageBlock{
-		itemsOffset:   make([]uint32, 0, 1<<8),
-		data:          make([]byte, blockSize+intIndexSize),
-		size:          pbDataOffset,
-		num:           0,
-		prevKey:       nil,
-		prevValue:     nil,
-		prevHasShared: false,
-		sharedKey:     nil,
-		sharedNum:     0,
+		itemsOffset:     make([]uint32, 0, 1<<8),
+		data:            make([]byte, blockSize+intIndexSize),
+		size:            pbDataOffset,
+		num:             0,
+		prevKey:         nil,
+		prevValueOffset: 0,
+		prevHasShared:   false,
+		sharedKey:       nil,
+		sharedNum:       0,
 	}
 
 	pb.header.version = version
@@ -86,7 +86,7 @@ func (p *pageBlock) reset(version uint16) {
 	p.size = pbDataOffset
 	p.num = 0
 	p.prevKey = nil
-	p.prevValue = nil
+	p.prevValueOffset = 0
 	p.prevHasShared = false
 	p.sharedKey = nil
 	p.sharedNum = 0
@@ -112,11 +112,11 @@ func (p *pageBlock) getIntIndexSize() uint32 {
 	return uint32(p.num * itemOffsetSize)
 }
 
-func (p *pageBlock) writeItem(key, value []byte) (n uint32) {
+func (p *pageBlock) writeItem(key []byte, valueOffset uint32) (n uint32) {
 	if p.header.version == atVersionPrefixBlockCompress {
-		n = p.writeItemPrefixCompress(key, value)
+		n = p.writeItemPrefixCompress(key, valueOffset)
 	} else {
-		n = p.writeItemDefault(key, value)
+		n = p.writeItemDefault(key, valueOffset)
 	}
 
 	p.num++
@@ -136,13 +136,11 @@ func (p *pageBlock) writeSharedInternal(shared int) uint32 {
 		keySize = uint32(len(p.prevKey[len(p.sharedKey):])) + 1
 	}
 
-	valueSize := uint32(len(p.prevValue))
-	sz := keySize + valueSize + itemHeaderLen
+	sz := keySize + itemHeaderLen
 	nextSize := p.allocBuf(sz)
-
 	p.itemsOffset = append(p.itemsOffset, p.size)
 	itemBuf := p.data[p.size:nextSize]
-	binary.BigEndian.PutUint16(itemBuf[0:itemHeaderLen], uint16(keySize))
+	binary.BigEndian.PutUint32(itemBuf[0:itemHeaderLen], p.prevValueOffset)
 
 	if !p.prevHasShared {
 		if shared >= itemSharedMinLength {
@@ -158,36 +156,30 @@ func (p *pageBlock) writeSharedInternal(shared int) uint32 {
 		copy(itemBuf[itemHeaderLen+1:itemHeaderLen+keySize], p.prevKey[len(p.sharedKey):])
 	}
 
-	copy(itemBuf[itemHeaderLen+keySize:sz], p.prevValue)
-
 	p.size = nextSize
 
 	return sz
 }
 
-func (p *pageBlock) writeItemDefault(key, value []byte) uint32 {
+func (p *pageBlock) writeItemDefault(key []byte, valueOffset uint32) uint32 {
 	keySize := uint32(len(key))
-	valueSize := uint32(len(value))
-
-	sz := keySize + valueSize + itemHeaderLen
+	sz := keySize + itemHeaderLen
 	nextSize := p.allocBuf(sz)
 
 	p.itemsOffset = append(p.itemsOffset, p.size)
 	itemBuf := p.data[p.size:nextSize]
-	binary.BigEndian.PutUint16(itemBuf[0:itemHeaderLen], uint16(keySize))
+	binary.BigEndian.PutUint32(itemBuf[0:itemHeaderLen], valueOffset)
 	copy(itemBuf[itemHeaderLen:itemHeaderLen+keySize], key)
-	copy(itemBuf[itemHeaderLen+keySize:sz], value)
 	p.size = nextSize
 
 	return sz
 }
 
-func (p *pageBlock) writeItemPrefixCompress(key, value []byte) uint32 {
-	if p.prevKey == nil && p.prevValue == nil {
-		p.prevKey = make([]byte, 0, 128)
+func (p *pageBlock) writeItemPrefixCompress(key []byte, valueOffset uint32) uint32 {
+	if p.prevKey == nil && p.prevValueOffset == 0 {
+		p.prevKey = make([]byte, 0, 1<<7)
 		p.prevKey = append(p.prevKey[:0], key...)
-		p.prevValue = make([]byte, 0, 256)
-		p.prevValue = append(p.prevValue[:0], value...)
+		p.prevValueOffset = valueOffset
 		p.prevHasShared = false
 		p.sharedKey = make([]byte, 0, 1<<6)
 		return 0
@@ -228,7 +220,7 @@ func (p *pageBlock) writeItemPrefixCompress(key, value []byte) uint32 {
 	sz := p.writeSharedInternal(shared)
 
 	p.prevKey = append(p.prevKey[:0], key...)
-	p.prevValue = append(p.prevValue[:0], value...)
+	p.prevValueOffset = valueOffset
 	if shared >= itemSharedMinLength {
 		p.prevHasShared = true
 	} else {
@@ -241,7 +233,7 @@ func (p *pageBlock) writeItemPrefixCompress(key, value []byte) uint32 {
 }
 
 func (p *pageBlock) writeFinish() {
-	if p.header.version == atVersionPrefixBlockCompress && p.prevKey != nil && p.prevValue != nil {
+	if p.header.version == atVersionPrefixBlockCompress && p.prevKey != nil && p.prevValueOffset > 0 {
 		_ = p.writeSharedInternal(0)
 	}
 
@@ -262,7 +254,7 @@ func (p *pageBlock) writeFinish() {
 	p.intIndex = p.data[p.header.intIndexOffset:p.size]
 
 	p.prevKey = nil
-	p.prevValue = nil
+	p.prevValueOffset = 0
 	p.sharedKey = nil
 }
 
@@ -414,7 +406,7 @@ func (p *pageBlock) newIter(o *iterOptions) *pageBlockIterator {
 
 	if p.header.version == atVersionPrefixBlockCompress {
 		if cap(iter.keyBuf) == 0 {
-			iter.keyBuf = make([]byte, 0, 1<<7)
+			iter.keyBuf = make([]byte, 0, 128)
 		}
 		if iter.sharedCache == nil {
 			iter.sharedCache = &sharedInfo{idx: -1, key: nil}
@@ -439,7 +431,7 @@ func (p *pageBlock) allocBuf(sz uint32) uint32 {
 }
 
 func (p *pageBlock) bytes() []byte {
-	return p.data[:p.size]
+	return p.data
 }
 
 func (p *pageBlock) inuseBytes() uint32 {

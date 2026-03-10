@@ -21,10 +21,10 @@ import (
 	"os"
 	"runtime/debug"
 
-	"github.com/zuoyebang/bitalosdb/internal/bindex"
-	"github.com/zuoyebang/bitalosdb/internal/bytepools"
-	"github.com/zuoyebang/bitalosdb/internal/errors"
-	"github.com/zuoyebang/bitalosdb/internal/vfs"
+	"github.com/zuoyebang/bitalosdb/v2/internal/bindex"
+	"github.com/zuoyebang/bitalosdb/v2/internal/bytepools"
+	"github.com/zuoyebang/bitalosdb/v2/internal/errors"
+	"github.com/zuoyebang/bitalosdb/v2/internal/vfs"
 )
 
 type ReadableFile interface {

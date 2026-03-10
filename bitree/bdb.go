@@ -18,11 +18,12 @@ import (
 	"bytes"
 	"sync"
 
-	"github.com/zuoyebang/bitalosdb/bitpage"
-	"github.com/zuoyebang/bitalosdb/bitree/bdb"
-	"github.com/zuoyebang/bitalosdb/internal/consts"
-	"github.com/zuoyebang/bitalosdb/internal/options"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
+	"github.com/zuoyebang/bitalosdb/v2/bitpage"
+	"github.com/zuoyebang/bitalosdb/v2/bitree/bdb"
+	"github.com/zuoyebang/bitalosdb/v2/internal/consts"
+	"github.com/zuoyebang/bitalosdb/v2/internal/kkv"
+	"github.com/zuoyebang/bitalosdb/v2/internal/options"
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
 )
 
 func (t *Bitree) openBdb(path string, opts *options.BdbOptions) error {
@@ -95,9 +96,9 @@ func (t *Bitree) bdbDelete(key []byte) error {
 	return err
 }
 
-func (t *Bitree) NewBdbIter() *bdb.BdbIterator {
-	rtx := t.txPool.Load()
-	return t.bdb.NewIter(rtx)
+func (t *Bitree) bdbUpdate() bool {
+	_ = t.bdb.Update(func(tx *bdb.Tx) error { return nil })
+	return t.txPool.Update()
 }
 
 func (t *Bitree) FindKeyPageNum(key []byte) (bitpage.PageNum, []byte, func()) {
@@ -106,13 +107,7 @@ func (t *Bitree) FindKeyPageNum(key []byte) (bitpage.PageNum, []byte, func()) {
 		rtx.Unref(true)
 	}
 
-	bkt := rtx.Bucket()
-	if bkt == nil {
-		t.opts.Logger.Errorf("FindKeyPageNum Bucket is nil index:%d", t.index)
-		return nilPageNum, nil, rtxCloser
-	}
-
-	pn, sentinel := t.findKeyPageNum(key, bkt.Cursor())
+	pn, sentinel := t.findKeyPageNum(key, rtx.Bucket().Cursor())
 	return pn, sentinel, rtxCloser
 }
 
@@ -139,8 +134,8 @@ func (t *Bitree) findPrefixDeleteKeyPageNums(
 		return
 	}
 
-	keyPrefixDelete := t.opts.KeyPrefixDeleteFunc(key)
-	if keyPrefixDelete != t.opts.KeyPrefixDeleteFunc(sentinel) {
+	keyPrefixDelete := kkv.DecodeKeyVersion(key)
+	if keyPrefixDelete != kkv.DecodeKeyVersion(sentinel) {
 		return
 	}
 
@@ -153,25 +148,13 @@ func (t *Bitree) findPrefixDeleteKeyPageNums(
 		sentinels = append(sentinels, nk)
 		pns = append(pns, bitpage.PageNum(utils.BytesToUint32(nv)))
 
-		if bytes.Equal(sentinel, consts.BdbMaxKey) || keyPrefixDelete != t.opts.KeyPrefixDeleteFunc(nk) {
+		if bytes.Equal(sentinel, consts.BdbMaxKey) ||
+			keyPrefixDelete != kkv.DecodeKeyVersion(nk) {
 			break
 		}
 	}
 
 	return
-}
-
-func (t *Bitree) BdbDiskSize() int64 {
-	return t.bdb.DiskSize()
-}
-
-func (t *Bitree) BdbPath() string {
-	return t.bdb.Path()
-}
-
-func (t *Bitree) BdbUpdate() bool {
-	_ = t.bdb.Update(func(tx *bdb.Tx) error { return nil })
-	return t.txPool.Update()
 }
 
 type TxPool struct {

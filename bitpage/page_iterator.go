@@ -15,11 +15,13 @@
 package bitpage
 
 import (
+	"bytes"
 	"sync"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/errors"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
+	"github.com/zuoyebang/bitalosdb/v2/internal/errors"
+	"github.com/zuoyebang/bitalosdb/v2/internal/iterator"
+	"github.com/zuoyebang/bitalosdb/v2/internal/kkv"
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
 )
 
 type iterPos int8
@@ -31,15 +33,11 @@ const (
 	iterPosCurReverse iterPos = -2
 )
 
-const maxKeyBufCacheSize = 4 << 10
-
 type pageIterAlloc struct {
-	dbi                 PageIterator
-	key                 internalKey
-	keyBuf              []byte
-	prefixOrFullSeekKey []byte
-	merging             mergingIter
-	mlevels             [3]mergingIterLevel
+	dbi     PageIterator
+	key     InternalKKVKey
+	merging iterator.KKVMergingIter
+	mLevels [3]iterator.KKVMergingIterLevel
 }
 
 var pageIterAllocPool = sync.Pool{
@@ -49,32 +47,19 @@ var pageIterAllocPool = sync.Pool{
 }
 
 type PageIterator struct {
-	opts                iterOptions
-	cmp                 base.Compare
-	equal               base.Equal
-	iter                internalIterator
-	readState           *readState
-	readStateCloser     func()
-	err                 error
-	key                 *internalKey
-	keyBuf              []byte
-	value               []byte
-	iterKey             *internalKey
-	iterValue           []byte
-	alloc               *pageIterAlloc
-	prefixOrFullSeekKey []byte
-	iterValidityState   IterValidityState
-	pos                 iterPos
-	lastPositioningOp   lastPositioningOpKind
+	opts              iterOptions
+	iter              InternalKKVIterator
+	closer            func()
+	err               error
+	key               InternalKKVKey
+	keyBuf            []byte
+	value             []byte
+	iterKey           *InternalKKVKey
+	iterValue         []byte
+	alloc             *pageIterAlloc
+	iterValidityState IterValidityState
+	pos               iterPos
 }
-
-type lastPositioningOpKind int8
-
-const (
-	unknownLastPositionOp lastPositioningOpKind = iota
-	seekGELastPositioningOp
-	seekLTLastPositioningOp
-)
 
 type IterValidityState int8
 
@@ -83,9 +68,9 @@ const (
 	IterValid
 )
 
-func (i *PageIterator) getKV() (*base.InternalKey, []byte) {
+func (i *PageIterator) getKV() (*InternalKKVKey, []byte) {
 	if i.iterValidityState == IterValid {
-		return i.key, i.value
+		return &i.key, i.value
 	}
 
 	return nil, nil
@@ -96,25 +81,20 @@ func (i *PageIterator) findNextEntry() {
 	i.pos = iterPosCurForward
 
 	for i.iterKey != nil {
-		key := *i.iterKey
-
-		switch key.Kind() {
+		kind := i.iterKey.Kind()
+		switch kind {
 		case internalKeyKindSet:
-			i.keyBuf = append(i.keyBuf[:0], key.UserKey...)
-			*i.key = base.MakeInternalKey2(i.keyBuf, key.Trailer)
+			i.key.Copy(i.iterKey)
 			i.value = i.iterValue
 			i.iterValidityState = IterValid
 			return
-
 		case internalKeyKindDelete, internalKeyKindPrefixDelete:
-			i.keyBuf = append(i.keyBuf[:0], key.UserKey...)
-			*i.key = base.MakeInternalKey2(i.keyBuf, key.Trailer)
+			i.key.Copy(i.iterKey)
 			i.value = nil
 			i.iterValidityState = IterValid
 			return
-
 		default:
-			i.opts.Logger.Errorf("bitpage: PageIterator findNextEntry invalid internal key kind %d", key.Kind())
+			i.opts.Logger.Errorf("bitpage: PageIterator findNextEntry invalid internal key kind %d", kind)
 			i.nextUserKey()
 			continue
 		}
@@ -127,13 +107,12 @@ func (i *PageIterator) nextUserKey() {
 	}
 
 	if i.iterValidityState != IterValid {
-		i.keyBuf = append(i.keyBuf[:0], i.iterKey.UserKey...)
-		*i.key = base.MakeInternalKey2(i.keyBuf, i.iterKey.Trailer)
+		i.key.Copy(i.iterKey)
 	}
 
 	for {
 		i.iterKey, i.iterValue = i.iter.Next()
-		if i.iterKey == nil || !i.equal(i.key.UserKey, i.iterKey.UserKey) {
+		if i.iterKey == nil || !kkv.UserKeyEqual(&i.key, i.iterKey) {
 			break
 		}
 	}
@@ -144,10 +123,8 @@ func (i *PageIterator) findPrevEntry() {
 	i.pos = iterPosCurReverse
 
 	for i.iterKey != nil {
-		key := *i.iterKey
-
 		if i.iterValidityState == IterValid {
-			if !i.equal(key.UserKey, i.key.UserKey) {
+			if !kkv.UserKeyEqual(i.iterKey, &i.key) {
 				i.pos = iterPosPrev
 				if i.err != nil {
 					i.iterValidityState = IterExhausted
@@ -156,24 +133,14 @@ func (i *PageIterator) findPrevEntry() {
 			}
 		}
 
-		switch key.Kind() {
-		case internalKeyKindSet:
-			i.keyBuf = append(i.keyBuf[:0], key.UserKey...)
-			*i.key = base.MakeInternalKey2(i.keyBuf, key.Trailer)
+		i.key.Copy(i.iterKey)
+		if i.iterKey.Kind() == internalKeyKindSet {
 			i.value = i.iterValue
-			i.iterValidityState = IterValid
-			i.iterKey, i.iterValue = i.iter.Prev()
-		case internalKeyKindDelete, internalKeyKindPrefixDelete:
-			i.keyBuf = append(i.keyBuf[:0], key.UserKey...)
-			*i.key = base.MakeInternalKey2(i.keyBuf, key.Trailer)
+		} else {
 			i.value = nil
-			i.iterValidityState = IterValid
-			i.iterKey, i.iterValue = i.iter.Prev()
-		default:
-			i.err = errors.Errorf("bitpage: invalid internal key kind %s", key.Kind())
-			i.iterValidityState = IterExhausted
-			return
 		}
+		i.iterValidityState = IterValid
+		i.iterKey, i.iterValue = i.iter.Prev()
 	}
 
 	if i.iterValidityState == IterValid {
@@ -189,82 +156,47 @@ func (i *PageIterator) prevUserKey() {
 		return
 	}
 	if i.iterValidityState != IterValid {
-		i.keyBuf = append(i.keyBuf[:0], i.iterKey.UserKey...)
-		*i.key = base.MakeInternalKey2(i.keyBuf, i.iterKey.Trailer)
+		i.key.Copy(i.iterKey)
 	}
 	for {
 		i.iterKey, i.iterValue = i.iter.Prev()
 		if i.iterKey == nil {
 			break
 		}
-		if !i.equal(i.key.UserKey, i.iterKey.UserKey) {
+		if !kkv.UserKeyEqual(&i.key, i.iterKey) {
 			break
 		}
 	}
 }
 
-func (i *PageIterator) SeekGE(key []byte) (*internalKey, []byte) {
-	lastPositioningOp := i.lastPositioningOp
-
-	i.lastPositioningOp = unknownLastPositionOp
+func (i *PageIterator) SeekGE(key []byte) (*InternalKKVKey, []byte) {
 	i.err = nil
-	if lowerBound := i.opts.GetLowerBound(); lowerBound != nil && i.cmp(key, lowerBound) < 0 {
+	if lowerBound := i.opts.GetLowerBound(); lowerBound != nil && bytes.Compare(key, lowerBound) < 0 {
 		key = lowerBound
-	} else if upperBound := i.opts.GetUpperBound(); upperBound != nil && i.cmp(key, upperBound) > 0 {
+	} else if upperBound := i.opts.GetUpperBound(); upperBound != nil && bytes.Compare(key, upperBound) > 0 {
 		key = upperBound
-	}
-
-	if lastPositioningOp == seekGELastPositioningOp {
-		if i.cmp(i.prefixOrFullSeekKey, key) <= 0 {
-			if i.iterValidityState == IterExhausted || (i.iterValidityState == IterValid && i.cmp(key, i.key.UserKey) <= 0) {
-				return i.getKV()
-			}
-		}
 	}
 
 	i.iterKey, i.iterValue = i.iter.SeekGE(key)
 	i.findNextEntry()
-	if i.Error() == nil {
-		i.prefixOrFullSeekKey = append(i.prefixOrFullSeekKey[:0], key...)
-		i.lastPositioningOp = seekGELastPositioningOp
-	}
 	return i.getKV()
 }
 
-func (i *PageIterator) SeekPrefixGE(prefix, key []byte, trySeekUsingNext bool) (*internalKey, []byte) {
-	return nil, nil
-}
-
-func (i *PageIterator) SeekLT(key []byte) (*internalKey, []byte) {
-	lastPositioningOp := i.lastPositioningOp
-	i.lastPositioningOp = unknownLastPositionOp
+func (i *PageIterator) SeekLT(key []byte) (*InternalKKVKey, []byte) {
 	i.err = nil
-	if upperBound := i.opts.GetUpperBound(); upperBound != nil && i.cmp(key, upperBound) > 0 {
+	if upperBound := i.opts.GetUpperBound(); upperBound != nil && bytes.Compare(key, upperBound) > 0 {
 		key = upperBound
-	} else if lowerBound := i.opts.GetLowerBound(); lowerBound != nil && i.cmp(key, lowerBound) < 0 {
+	} else if lowerBound := i.opts.GetLowerBound(); lowerBound != nil && bytes.Compare(key, lowerBound) < 0 {
 		key = lowerBound
-	}
-
-	if lastPositioningOp == seekLTLastPositioningOp {
-		if i.cmp(key, i.prefixOrFullSeekKey) <= 0 {
-			if i.iterValidityState == IterExhausted || (i.iterValidityState == IterValid && i.cmp(i.key.UserKey, key) < 0) {
-				return i.getKV()
-			}
-		}
 	}
 
 	i.iterKey, i.iterValue = i.iter.SeekLT(key)
 	i.findPrevEntry()
-	if i.Error() == nil {
-		i.prefixOrFullSeekKey = append(i.prefixOrFullSeekKey[:0], key...)
-		i.lastPositioningOp = seekLTLastPositioningOp
-	}
 	return i.getKV()
 }
 
-func (i *PageIterator) First() (*internalKey, []byte) {
+func (i *PageIterator) First() (*InternalKKVKey, []byte) {
 	i.err = nil
-	i.lastPositioningOp = unknownLastPositionOp
 	if lowerBound := i.opts.GetLowerBound(); lowerBound != nil {
 		i.iterKey, i.iterValue = i.iter.SeekGE(lowerBound)
 	} else {
@@ -274,9 +206,8 @@ func (i *PageIterator) First() (*internalKey, []byte) {
 	return i.getKV()
 }
 
-func (i *PageIterator) Last() (*internalKey, []byte) {
+func (i *PageIterator) Last() (*InternalKKVKey, []byte) {
 	i.err = nil
-	i.lastPositioningOp = unknownLastPositionOp
 	if upperBound := i.opts.GetUpperBound(); upperBound != nil {
 		i.iterKey, i.iterValue = i.iter.SeekLT(upperBound)
 	} else {
@@ -286,11 +217,10 @@ func (i *PageIterator) Last() (*internalKey, []byte) {
 	return i.getKV()
 }
 
-func (i *PageIterator) Next() (*internalKey, []byte) {
+func (i *PageIterator) Next() (*InternalKKVKey, []byte) {
 	if i.err != nil {
 		return i.getKV()
 	}
-	i.lastPositioningOp = unknownLastPositionOp
 	switch i.pos {
 	case iterPosCurForward:
 		i.nextUserKey()
@@ -322,18 +252,14 @@ func (i *PageIterator) Next() (*internalKey, []byte) {
 	return i.getKV()
 }
 
-func (i *PageIterator) Prev() (*internalKey, []byte) {
+func (i *PageIterator) Prev() (*InternalKKVKey, []byte) {
 	if i.err != nil {
 		return i.getKV()
 	}
-	i.lastPositioningOp = unknownLastPositionOp
 	switch i.pos {
-	case iterPosCurForward:
 	case iterPosCurReverse:
 		i.prevUserKey()
-	case iterPosPrev:
-	}
-	if i.pos == iterPosCurForward {
+	case iterPosCurForward:
 		i.iterValidityState = IterExhausted
 		if i.iterKey == nil {
 			if upperBound := i.opts.GetUpperBound(); upperBound != nil {
@@ -345,6 +271,7 @@ func (i *PageIterator) Prev() (*internalKey, []byte) {
 			i.prevUserKey()
 		}
 	}
+
 	i.findPrevEntry()
 	return i.getKV()
 }
@@ -367,22 +294,12 @@ func (i *PageIterator) Close() error {
 	}
 	err := i.err
 
-	if i.readStateCloser != nil {
-		i.readStateCloser()
-		i.readStateCloser = nil
+	if i.closer != nil {
+		i.closer()
+		i.closer = nil
 	}
 
 	if alloc := i.alloc; alloc != nil {
-		if cap(i.keyBuf) >= maxKeyBufCacheSize {
-			alloc.keyBuf = nil
-		} else {
-			alloc.keyBuf = i.keyBuf
-		}
-		if cap(i.prefixOrFullSeekKey) >= maxKeyBufCacheSize {
-			alloc.prefixOrFullSeekKey = nil
-		} else {
-			alloc.prefixOrFullSeekKey = i.prefixOrFullSeekKey
-		}
 		*i = PageIterator{}
 		pageIterAllocPool.Put(alloc)
 	}
@@ -390,7 +307,6 @@ func (i *PageIterator) Close() error {
 }
 
 func (i *PageIterator) SetBounds(lower, upper []byte) {
-	i.lastPositioningOp = unknownLastPositionOp
 	i.iterKey = nil
 	i.iterValue = nil
 

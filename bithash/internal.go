@@ -14,7 +14,7 @@
 
 package bithash
 
-import "github.com/zuoyebang/bitalosdb/internal/base"
+import "github.com/zuoyebang/bitalosdb/v2/internal/base"
 
 type InternalKey = base.InternalKey
 
@@ -28,5 +28,4 @@ type Compare = base.Compare
 type Equal = base.Equal
 type Separator = base.Separator
 type Successor = base.Successor
-type Split = base.Split
 type Comparer = base.Comparer

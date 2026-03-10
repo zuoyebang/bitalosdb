@@ -15,23 +15,32 @@
 package bitpage
 
 import (
-	"fmt"
 	"sync/atomic"
 )
 
 type flushable interface {
-	get([]byte, uint32) ([]byte, bool, internalKeyKind, func())
-	newIter(*iterOptions) internalIterator
+	get([]byte, uint32) ([]byte, bool, internalKeyKind)
+	exist([]byte, uint32) (bool, internalKeyKind)
+	newIter(*iterOptions) InternalKKVIterator
+	set(internalKey, ...[]byte) error
 	getKeyStats() (int, int, int)
 	itemCount() int
 	inuseBytes() uint64
 	dataBytes() uint64
-	readyForFlush() bool
 	close() error
-	path() string
+	writeIdxToFile() error
+	getFilePath() []string
 	idxFilePath() string
+	getID() string
 	empty() bool
 	getModTime() int64
+	mmapRLock()
+	mmapRUnLock()
+	kindStatis(kind internalKeyKind)
+	flushFinish() error
+	flushIndexes() error
+	getFileType() FileType
+	getMaxKey() []byte
 }
 
 type flushableEntry struct {
@@ -47,10 +56,7 @@ func (e *flushableEntry) readerRef() {
 }
 
 func (e *flushableEntry) readerUnref() {
-	switch v := e.readerRefs.Add(-1); {
-	case v < 0:
-		fmt.Printf("bitpage: inconsistent reference path:%s count:%d\n", e.path(), v)
-	case v == 0:
+	if e.readerRefs.Add(-1) == 0 {
 		if e.release != nil {
 			e.release()
 			e.release = nil
@@ -63,3 +69,10 @@ func (e *flushableEntry) setObsolete() {
 }
 
 type flushableList []*flushableEntry
+
+var (
+	_ flushable = (*sklTable)(nil)
+	_ flushable = (*superTable)(nil)
+	_ flushable = (*vectorArrayTable)(nil)
+	_ flushable = (*arrayTable)(nil)
+)

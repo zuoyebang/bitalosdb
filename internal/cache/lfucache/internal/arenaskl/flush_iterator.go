@@ -15,7 +15,7 @@
 package arenaskl
 
 import (
-	base2 "github.com/zuoyebang/bitalosdb/internal/cache/lfucache/internal/base"
+	base2 "github.com/zuoyebang/bitalosdb/v2/internal/cache/lfucache/internal/base"
 )
 
 type flushIterator struct {
@@ -31,12 +31,6 @@ func (it *flushIterator) String() string {
 
 func (it *flushIterator) SeekGE(key []byte) (*base2.InternalKey, []byte) {
 	panic("mcache: arenaskl flushIterator SeekGE unimplemented")
-}
-
-func (it *flushIterator) SeekPrefixGE(
-	prefix, key []byte, trySeekUsingNext bool,
-) (*base2.InternalKey, []byte) {
-	panic("mcache: arenaskl flushIterator SeekPrefixGE unimplemented")
 }
 
 func (it *flushIterator) SeekLT(key []byte) (*base2.InternalKey, []byte) {

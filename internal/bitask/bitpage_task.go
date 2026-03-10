@@ -20,8 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/statemachine"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
 )
 
 const (
@@ -54,56 +53,64 @@ type BitpageTaskData struct {
 }
 
 type BitpageTaskOptions struct {
-	Size    int
-	DbState *statemachine.DbStateMachine
-	DoFunc  func(*BitpageTaskData)
-	Logger  base.Logger
-	TaskWg  *sync.WaitGroup
+	Size      int
+	WorkerNum int
+	DoFunc    func(*BitpageTaskData)
+	Logger    base.Logger
+	TaskWg    *sync.WaitGroup
 }
 
 type BitpageTask struct {
+	workNum    int
 	taskWg     *sync.WaitGroup
-	recvCh     chan *BitpageTaskData
+	recvChs    []chan *BitpageTaskData
 	closed     atomic.Bool
 	logger     base.Logger
-	dbState    *statemachine.DbStateMachine
 	doTaskFunc func(*BitpageTaskData)
 }
 
 func NewBitpageTask(opts *BitpageTaskOptions) *BitpageTask {
+	workerNum := opts.WorkerNum
+	size := opts.Size / workerNum
 	bpTask := &BitpageTask{
-		recvCh:     make(chan *BitpageTaskData, opts.Size),
-		dbState:    opts.DbState,
+		recvChs:    make([]chan *BitpageTaskData, workerNum),
 		doTaskFunc: opts.DoFunc,
 		logger:     opts.Logger,
 		taskWg:     opts.TaskWg,
+		workNum:    workerNum,
 	}
-	bpTask.Run()
+
+	for i := 0; i < workerNum; i++ {
+		bpTask.recvChs[i] = make(chan *BitpageTaskData, size)
+		bpTask.consume(i)
+	}
+
+	bpTask.logger.Infof("bitpage task workerNum:%d size:%d background running...", workerNum, size)
+
 	return bpTask
 }
 
-func (t *BitpageTask) Run() {
+func (t *BitpageTask) consume(i int) {
 	t.taskWg.Add(1)
-	go func() {
+	go func(index int) {
 		defer func() {
 			t.taskWg.Done()
-			t.logger.Infof("bitpage task background exit...")
+			t.logger.Infof("bitpage task %d background exit...", index)
 		}()
 
 		do := func() bool {
 			defer func() {
 				if r := recover(); r != nil {
-					t.logger.Errorf("bitpage task do panic err:%v stack:%s", r, string(debug.Stack()))
+					t.logger.Errorf("bitpage task %d do panic err:%v stack:%s", index, r, string(debug.Stack()))
 				}
 			}()
 
-			task, ok := <-t.recvCh
+			task, ok := <-t.recvChs[index]
 			if !ok || t.isClosed() || task == nil {
 				return true
 			}
 
 			task.WaitDuration = time.Since(task.SendTime)
-			t.dbState.WaitBitowerHighPriority(task.Index)
 			t.doTaskFunc(task)
 			return false
 		}
@@ -114,23 +121,26 @@ func (t *BitpageTask) Run() {
 				break
 			}
 		}
-	}()
-
-	t.logger.Infof("bitpage task background running...")
+	}(i)
 }
 
 func (t *BitpageTask) isClosed() bool {
-	return t.closed.Load() == true
+	return t.closed.Load()
 }
 
 func (t *BitpageTask) Close() {
 	t.closed.Store(true)
-	t.recvCh <- nil
+	for i := range t.recvChs {
+		t.recvChs[i] <- nil
+	}
 }
 
 func (t *BitpageTask) PushTask(task *BitpageTaskData) {
-	if !t.isClosed() {
-		task.SendTime = time.Now()
-		t.recvCh <- task
+	if t.isClosed() {
+		return
 	}
+
+	task.SendTime = time.Now()
+	index := task.Index % t.workNum
+	t.recvChs[index] <- task
 }

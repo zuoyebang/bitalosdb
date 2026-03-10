@@ -15,18 +15,16 @@
 package bitpage
 
 import (
-	"bufio"
 	"encoding/binary"
 	"io"
 	"os"
 	"sync"
-	"sync/atomic"
 	"syscall"
-	"unsafe"
 
-	"github.com/zuoyebang/bitalosdb/internal/consts"
-	"github.com/zuoyebang/bitalosdb/internal/errors"
-	"github.com/zuoyebang/bitalosdb/internal/mmap"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/consts"
+	"github.com/zuoyebang/bitalosdb/v2/internal/errors"
+	"github.com/zuoyebang/bitalosdb/v2/internal/mmap"
 	"golang.org/x/sys/unix"
 )
 
@@ -36,52 +34,81 @@ const (
 )
 
 const (
-	align4            = 3
-	tableHeaderOffset = 0
-	tableHeaderSize   = 4
-	tableDataOffset   = 4
+	TblVersionDefault uint16 = 1 + iota
 )
 
 const (
-	tableWriteMmap = 1
-	tableReadMmap  = 2
-	tableWriteDisk = 3
+	TblHeaderOffset = 0
+	TblHeaderSize   = 4
+	TblDataOffset   = 4
+
+	TblFileHeaderSize   = 8
+	TblItemKeySize      = 4
+	TblItemValueSize    = 2
+	TblItemHeaderSize   = TblItemKeySize + TblItemValueSize
+	TblItemValueNil     = 1 << 31
+	TblItemValueNilMask = TblItemValueNil - 1
 )
 
-type tableOptions struct {
-	openType     int
-	initMmapSize int
+const (
+	TableTypeWriteMmap = 1 + iota
+	TableTypeReadMmap
+	TableTypeWriteDisk
+	TableTypeOnceWriteDisk
+)
+
+var defaultTableOptions = &TableOptions{
+	OpenType:     TableTypeWriteMmap,
+	InitMmapSize: consts.BitpageReadMmapSize,
 }
 
-var defaultTableOptions = &tableOptions{
-	openType:     tableWriteMmap,
-	initMmapSize: consts.BitpageInitMmapSize,
+type TableOptions struct {
+	OpenType     int
+	InitMmapSize int
+	BlockSize    uint32
+	FileExist    bool
+	Version      int
 }
 
-type table struct {
-	path     string
+type TableReader struct {
+	data []byte
+	r    int
+}
+
+func (t *TableReader) ReadByte() (byte, error) {
+	if t.r >= len(t.data) {
+		return 0, io.EOF
+	}
+	c := t.data[t.r]
+	t.r++
+	return c, nil
+}
+
+type Table struct {
 	file     *os.File
-	offset   atomic.Uint32
+	path     string
+	offset   uint32
 	filesz   int
 	data     []byte
 	datasz   int
 	opened   bool
 	openType int
-	mmaplock sync.RWMutex
 	modTime  int64
+	version  uint16
+	mmaplock sync.RWMutex
 }
 
-func openTable(path string, opts *tableOptions) (*table, error) {
+func OpenTable(path string, opts *TableOptions) (*Table, error) {
 	var err error
 	var fileStat os.FileInfo
 
-	t := &table{
+	t := &Table{
 		opened: true,
 	}
 
 	defer func() {
 		if err != nil {
-			_ = t.close()
+			_ = t.Close()
 		}
 	}()
 
@@ -98,11 +125,11 @@ func openTable(path string, opts *tableOptions) (*table, error) {
 	t.filesz = int(fileStat.Size())
 	t.modTime = fileStat.ModTime().Unix()
 
-	switch opts.openType {
-	case tableWriteMmap:
-		sz := opts.initMmapSize
+	switch opts.OpenType {
+	case TableTypeWriteMmap:
+		sz := opts.InitMmapSize
 		if sz == 0 {
-			sz = consts.BitpageInitMmapSize
+			sz = consts.BitpageReadMmapSize
 		}
 		if t.filesz > sz {
 			sz = t.filesz
@@ -110,37 +137,47 @@ func openTable(path string, opts *tableOptions) (*table, error) {
 		if err = t.mmapWrite(sz); err != nil {
 			return nil, err
 		}
-		if err = t.initHeader(); err != nil {
-			return nil, err
+		if t.filesz == 0 {
+			if _, err = t.alloc(TblHeaderSize); err != nil {
+				return nil, err
+			}
+			t.setOffsetOnDisk(TblHeaderSize)
 		}
-		t.offset.Store(t.getOffset())
-	case tableReadMmap:
+		t.offset = t.getOffsetOnDisk()
+	case TableTypeReadMmap:
 		if err = t.mmapRead(t.filesz); err != nil {
 			return nil, err
 		}
-		t.offset.Store(t.getOffset())
-	case tableWriteDisk:
-		if err = t.mmapRead(opts.initMmapSize); err != nil {
+		t.offset = uint32(t.filesz)
+	case TableTypeWriteDisk:
+		sz := opts.InitMmapSize
+		if sz == 0 {
+			sz = consts.BitpageReadMmapSize
+		}
+		if t.filesz > sz {
+			sz = t.filesz
+		}
+		if err = t.mmapRead(sz); err != nil {
 			return nil, err
 		}
-		t.offset.Store(uint32(t.filesz))
+		t.offset = uint32(t.filesz)
+	case TableTypeOnceWriteDisk:
+		t.offset = uint32(t.filesz)
 	default:
-		return nil, ErrTableOpenType
+		return nil, base.ErrTableOpenType
 	}
 
 	return t, nil
 }
 
-func (t *table) close() error {
+func (t *Table) Close() error {
 	if !t.opened {
 		return nil
 	}
 
 	t.opened = false
 
-	if err := t.munmap(); err != nil {
-		return err
-	}
+	t.munmap()
 
 	if t.file != nil {
 		if err := t.file.Sync(); err != nil {
@@ -154,15 +191,44 @@ func (t *table) close() error {
 	return nil
 }
 
-func (t *table) Size() uint32 {
-	return t.offset.Load()
+func (t *Table) getModTime() int64 {
+	return t.modTime
 }
 
-func (t *table) Capacity() int {
-	return t.datasz
+func (t *Table) getPath() string {
+	return t.path
 }
 
-func (t *table) calcExpandSize(size int) (int, error) {
+func (t *Table) Size() uint32 {
+	return t.offset
+}
+
+func (t *Table) isOverflow(n uint32) bool {
+	return n > t.offset
+}
+
+func (t *Table) isEOF(n uint32) bool {
+	return n < TblFileHeaderSize || n >= t.offset
+}
+
+func (t *Table) empty() bool {
+	return t.Size() == TblFileHeaderSize
+}
+
+func (t *Table) getVersion() uint16 {
+	return t.version
+}
+
+func (t *Table) addOffset(val uint32) uint32 {
+	t.offset += val
+	return t.offset
+}
+
+func (t *Table) setOffset(val uint32) {
+	t.offset = val
+}
+
+func (t *Table) calcExpandSize(size int) (int, error) {
 	for i := uint(15); i <= 30; i++ {
 		if size <= 1<<i {
 			return 1 << i, nil
@@ -185,53 +251,59 @@ func (t *table) calcExpandSize(size int) (int, error) {
 	return int(sz), nil
 }
 
-func (t *table) expandFileSize(size int) error {
+func (t *Table) growFileSize(sz int) {
+	if sz > t.filesz {
+		t.filesz = sz
+	}
+}
+
+func (t *Table) expandFileSize(size int) error {
 	if size > t.filesz {
 		sz, err := t.calcExpandSize(size)
 		if err != nil {
 			return err
 		}
-		if err = t.fileTruncate(sz); err != nil {
-			return errors.Wrapf(err, "bitpage: table truncate fail file:%s", t.path)
+		if err = t.fileTruncate(sz, true); err != nil {
+			return errors.Errorf("bitpage: table truncate fail file:%s err:%s", t.path, err)
 		}
 	}
 	return nil
 }
 
-func (t *table) expandMmapSize(size int) error {
+func (t *Table) expandMmapSize(size int) error {
 	if size > t.datasz {
 		if err := t.mmapWrite(size); err != nil {
-			return errors.Wrapf(err, "bitpage: table mmapWrite fail file:%s", t.path)
+			return errors.Errorf("bitpage: table mmapWrite fail file:%s err:%s", t.path, err)
 		}
 	}
 	return nil
 }
 
-func (t *table) checkTableFull(size int) error {
+func (t *Table) checkTableFull(size int) error {
 	if size+int(t.Size()) > t.datasz {
-		return ErrTableFull
+		return base.ErrTableFull
 	}
 	return nil
 }
 
-func (t *table) allocAlign(size, align, overflow uint32) (uint32, uint32, error) {
+func (t *Table) allocAlign(size, align, overflow uint32) (uint32, uint32, error) {
 	padded := size + align
-	newSize := t.offset.Add(padded)
+	newSize := t.addOffset(padded)
 	sz := int(newSize) + int(overflow)
 	if sz > t.datasz {
-		return 0, 0, ErrTableFull
+		return 0, 0, base.ErrTableFull
 	}
 	if err := t.expandFileSize(sz); err != nil {
 		return 0, 0, err
 	}
 
-	t.setOffset(newSize)
+	t.setOffsetOnDisk(newSize)
 	offset := (newSize - padded + align) & ^align
 	return offset, padded, nil
 }
 
-func (t *table) alloc(size uint32) (uint32, error) {
-	newSize := t.offset.Add(size)
+func (t *Table) alloc(size uint32) (uint32, error) {
+	newSize := t.addOffset(size)
 	sz := int(newSize)
 	if err := t.expandFileSize(sz); err != nil {
 		return 0, err
@@ -240,82 +312,77 @@ func (t *table) alloc(size uint32) (uint32, error) {
 		return 0, err
 	}
 
-	t.setOffset(newSize)
+	t.setOffsetOnDisk(newSize)
 	offset := newSize - size
 	return offset, nil
 }
 
-func (t *table) initHeader() error {
-	if t.filesz == 0 {
-		if _, err := t.alloc(tableHeaderSize); err != nil {
-			return err
-		}
-		t.setOffset(tableHeaderSize)
-	}
-	return nil
+func (t *Table) getOffsetOnDisk() uint32 {
+	return t.readAtUInt32(TblHeaderOffset)
 }
 
-func (t *table) getOffset() uint32 {
-	return t.readAtUInt32(tableHeaderOffset)
+func (t *Table) setOffsetOnDisk(val uint32) {
+	t.writeAtUInt32(val, TblHeaderOffset)
 }
 
-func (t *table) setOffset(val uint32) {
-	t.writeAtUInt32(val, tableHeaderOffset)
-}
-
-func (t *table) writeAt(b []byte, offset uint32) (int, error) {
+func (t *Table) writeAtOffset(b []byte, offset uint32) (int, error) {
 	size := uint32(len(b))
 	n := copy(t.data[offset:offset+size], b)
 	return n, nil
 }
 
-func (t *table) readAtUInt16(offset uint16) uint16 {
+func (t *Table) readAtUInt16(offset uint16) uint16 {
 	return binary.BigEndian.Uint16(t.data[offset : offset+2])
 }
 
-func (t *table) writeAtUInt16(val uint16, offset uint32) {
+func (t *Table) writeAtUInt16(val uint16, offset uint32) {
 	binary.BigEndian.PutUint16(t.data[offset:offset+2], val)
 }
 
-func (t *table) readAtUInt32(offset uint32) uint32 {
+func (t *Table) readAtUInt32(offset uint32) uint32 {
 	return binary.BigEndian.Uint32(t.data[offset : offset+4])
 }
 
-func (t *table) writeAtUInt32(val uint32, offset uint32) {
+func (t *Table) writeAtUInt32(val uint32, offset uint32) {
 	binary.BigEndian.PutUint32(t.data[offset:offset+4], val)
 }
 
-func (t *table) getBytes(offset uint32, size uint32) []byte {
+func (t *Table) writeAt(b []byte, offset int64) (int, error) {
+	return t.file.WriteAt(b, offset)
+}
+
+func (t *Table) readAt(b []byte, offset int64) (int, error) {
+	return t.file.ReadAt(b, offset)
+}
+
+func (t *Table) getData(offset uint32) []byte {
+	return t.data[offset:t.offset]
+}
+
+func (t *Table) GetBytes(offset uint32, size uint32) []byte {
 	return t.data[offset : offset+size : offset+size]
 }
 
-func (t *table) getPointer(offset uint32) unsafe.Pointer {
-	return unsafe.Pointer(&t.data[offset])
+func (t *Table) getByte(offset uint32) byte {
+	return t.data[offset]
 }
 
-func (t *table) getData() []byte {
-	return t.data[:]
-}
-
-func (t *table) getPointerOffset(ptr unsafe.Pointer) uint32 {
-	if ptr == nil {
-		return 0
-	}
-	return uint32(uintptr(ptr) - uintptr(unsafe.Pointer(&t.data[0])))
-}
-
-func (t *table) fileTruncate(size int) error {
+func (t *Table) fileTruncate(size int, isSync bool) error {
 	if err := t.file.Truncate(int64(size)); err != nil {
 		return err
 	}
-	if err := t.file.Sync(); err != nil {
-		return err
+
+	if isSync {
+		if err := t.file.Sync(); err != nil {
+			return err
+		}
 	}
+
 	t.filesz = size
 	return nil
 }
 
-func (t *table) fileStatSize() int64 {
+func (t *Table) getFileSize() int64 {
 	info, err := t.file.Stat()
 	if err != nil {
 		return 0
@@ -323,34 +390,53 @@ func (t *table) fileStatSize() int64 {
 	return info.Size()
 }
 
-func (t *table) mmapWrite(sz int) error {
+func (t *Table) mmapWrite(sz int) error {
 	size, err := t.calcExpandSize(sz)
 	if err != nil {
 		return err
 	}
 
-	if err = t.munmap(); err != nil {
+	t.munmap()
+
+	t.data, err = mmapFile(t.file, size, mmap.RDWR, 0)
+	if err != nil {
 		return err
 	}
 
-	if err = mmapFile(t, mmap.RDWR, size); err != nil {
-		return err
-	}
+	t.datasz = size
 
 	return nil
 }
 
-func (t *table) mmapRead(sz int) error {
-	if err := t.munmap(); err != nil {
+func (t *Table) mmapRead(sz int) error {
+	t.munmap()
+
+	b, err := mmapFile(t.file, sz, mmap.RDONLY, 0)
+	if err != nil {
 		return err
 	}
 
-	return mmapFile(t, mmap.RDONLY, sz)
+	t.data = b
+	t.datasz = sz
+	return nil
 }
 
-func (t *table) mmapReadExpand() (bool, error) {
+func (t *Table) MmapRLock() {
+	t.mmaplock.RLock()
+}
+
+func (t *Table) MmapRUnlock() {
+	t.mmaplock.RUnlock()
+}
+
+func (t *Table) MmapReadGrow() error {
+	t.growFileSize(int(t.Size()))
+	return t.MmapReadExpand()
+}
+
+func (t *Table) MmapReadExpand() error {
 	if t.filesz <= t.datasz {
-		return false, nil
+		return nil
 	}
 
 	sz := t.datasz * 2
@@ -358,172 +444,115 @@ func (t *table) mmapReadExpand() (bool, error) {
 	t.mmaplock.Lock()
 	defer t.mmaplock.Unlock()
 
-	return true, t.mmapRead(sz)
-}
-
-func (t *table) mmapReadTruncate(sz int) error {
-	fileSize := int(t.fileStatSize())
-	if fileSize != sz {
-		if err := t.fileTruncate(sz); err != nil {
-			return err
-		}
-	}
-
 	return t.mmapRead(sz)
 }
 
-func (t *table) munmap() error {
+func (t *Table) MmapReadTruncate(sz int) error {
+	fileSize := int(t.getFileSize())
+	if fileSize != sz {
+		if err := t.fileTruncate(sz, true); err != nil {
+			return err
+		}
+	}
+	return t.mmapRead(sz)
+}
+
+func (t *Table) munmap() {
 	if t.data == nil {
-		return nil
+		return
 	}
 
-	if t.openType == tableWriteMmap {
+	if t.openType == TableTypeWriteMmap {
 		_ = unix.Msync(t.data, unix.MS_SYNC)
 	}
 
-	err := unix.Munmap(t.data)
+	_ = unix.Munmap(t.data)
 	t.data = nil
 	t.datasz = 0
-	if err != nil {
-		return errors.Wrapf(err, "bitpage: munmap fail")
-	}
-	return nil
 }
 
-func mmapFile(t *table, prot, length int) error {
-	b, err := mmap.Map(t.file, prot, length)
+func mmapFile(f *os.File, length, prot int, offset int64) ([]byte, error) {
+	b, err := mmap.MapRegion(f, length, prot, 0, offset)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	err = unix.Madvise(b, syscall.MADV_RANDOM)
 	if err != nil && err != syscall.ENOSYS {
-		return errors.Wrapf(err, "bitpage: madvise fail")
+		return nil, errors.Errorf("bitpage: madvise fail err:%s", err)
 	}
 
-	t.data = b
-	t.datasz = length
-	return nil
+	return b, nil
 }
 
-type tableWriter struct {
-	*table
-	wbuf      []byte
-	writer    io.Writer
-	bufWriter *bufio.Writer
+func (t *Table) GetIKey(offset uint32) base.InternalKey {
+	keySizeBuf := t.GetBytes(offset, TblItemKeySize)
+	keySize := binary.BigEndian.Uint32(keySizeBuf)
+	var hl uint32
+	if checkIsValueNil(keySizeBuf) {
+		keySize = keySize & TblItemValueNilMask
+		hl = TblItemKeySize
+	} else {
+		hl = TblItemHeaderSize
+	}
+	key := t.GetBytes(offset+hl, keySize)
+	return base.DecodeInternalKey(key)
 }
 
-func newTableWriter(t *table) *tableWriter {
-	return &tableWriter{table: t}
+func (t *Table) GetKV(offset uint32) ([]byte, []byte) {
+	keySizeBuf := t.GetBytes(offset, TblItemKeySize)
+	keySize := binary.BigEndian.Uint32(keySizeBuf)
+	if checkIsValueNil(keySizeBuf) {
+		keySize = keySize & TblItemValueNilMask
+		key := t.GetBytes(offset+TblItemKeySize, keySize)
+		return key, nil
+	} else {
+		valueSize := binary.BigEndian.Uint16(t.GetBytes(offset+TblItemKeySize, TblItemValueSize))
+		offset += TblItemHeaderSize
+		key := t.GetBytes(offset, keySize)
+		value := t.GetBytes(offset+keySize, uint32(valueSize))
+		return key, value
+	}
 }
 
-func (w *tableWriter) reset(offset int) error {
-	if _, err := w.file.Seek(int64(offset), io.SeekStart); err != nil {
-		return err
+func (t *Table) GetValue(offset uint32) []byte {
+	keySizeBuf := t.GetBytes(offset, TblItemKeySize)
+	if checkIsValueNil(keySizeBuf) {
+		return nil
 	}
 
-	w.writer = nil
-	w.bufWriter = nil
-	w.bufWriter = bufio.NewWriterSize(w.file, consts.BufioWriterBufSize)
-	w.writer = w.bufWriter
-	w.filesz = offset
-	w.offset.Store(uint32(offset))
-	return nil
+	keySize := binary.BigEndian.Uint32(keySizeBuf)
+	valueSize := binary.BigEndian.Uint16(t.GetBytes(offset+TblItemKeySize, TblItemValueSize))
+	offset += TblItemHeaderSize + keySize
+	value := t.GetBytes(offset, uint32(valueSize))
+	return value
 }
 
-func (w *tableWriter) encodeHeader(buf []byte, keySize uint16, valueSize uint32) {
-	binary.BigEndian.PutUint16(buf[0:2], keySize)
-	binary.BigEndian.PutUint32(buf[2:6], valueSize)
+func encodeKeySize(buf []byte, keySize uint32, valueSize uint16) int {
+	var hl int
+	if valueSize == 0 {
+		hl = TblItemKeySize
+		binary.BigEndian.PutUint32(buf[0:TblItemKeySize], TblItemValueNil|keySize)
+	} else {
+		hl = TblItemHeaderSize
+		binary.BigEndian.PutUint32(buf[0:TblItemKeySize], keySize)
+		binary.BigEndian.PutUint16(buf[TblItemKeySize:TblItemHeaderSize], valueSize)
+	}
+	return hl
 }
 
-func (w *tableWriter) decodeHeader(buf []byte) (uint16, uint32) {
-	return binary.BigEndian.Uint16(buf[0:2]), binary.BigEndian.Uint32(buf[2:6])
+func decodeKeySize(buf []byte) (uint32, uint16) {
+	isValueNil := checkIsValueNil(buf)
+	keySize := binary.BigEndian.Uint32(buf[0:TblItemKeySize])
+	if isValueNil {
+		keySize = keySize & TblItemValueNilMask
+		return keySize, 0
+	} else {
+		valueSize := binary.BigEndian.Uint16(buf[TblItemKeySize:TblItemHeaderSize])
+		return keySize, valueSize
+	}
 }
 
-func (w *tableWriter) set(key internalKey, value []byte) (uint32, error) {
-	keySize := key.Size()
-	valueSize := len(value)
-	preSize := keySize + stItemHeaderSize
-	wrn := 0
-
-	if cap(w.wbuf) < preSize {
-		w.wbuf = make([]byte, 0, preSize*2)
-	}
-
-	w.wbuf = w.wbuf[:preSize]
-	w.encodeHeader(w.wbuf[:stItemHeaderSize], uint16(keySize), uint32(valueSize))
-	key.Encode(w.wbuf[stItemHeaderSize:])
-	n, err := w.writer.Write(w.wbuf)
-	if err != nil {
-		return 0, err
-	}
-	wrn += n
-
-	if valueSize > 0 {
-		n, err = w.writer.Write(value)
-		if err != nil {
-			return 0, err
-		}
-		wrn += n
-	}
-
-	addSize := uint32(wrn)
-	w.wbuf = w.wbuf[:0]
-	offset := w.offset.Load()
-	w.offset.Add(addSize)
-	return offset, nil
-}
-
-func (w *tableWriter) setMulti(key internalKey, values ...[]byte) (uint32, error) {
-	keySize := key.Size()
-	preSize := keySize + stItemHeaderSize
-	wrn := 0
-	if cap(w.wbuf) < preSize {
-		w.wbuf = make([]byte, 0, preSize*2)
-	}
-
-	var valueSize int
-	for i := range values {
-		valueSize += len(values[i])
-	}
-
-	w.wbuf = w.wbuf[:preSize]
-	w.encodeHeader(w.wbuf[:stItemHeaderSize], uint16(keySize), uint32(valueSize))
-	key.Encode(w.wbuf[stItemHeaderSize:])
-	n, err := w.writer.Write(w.wbuf)
-	if err != nil {
-		return 0, err
-	}
-	wrn += n
-
-	if valueSize > 0 {
-		for i := range values {
-			n, err = w.writer.Write(values[i])
-			if err != nil {
-				return 0, err
-			}
-			wrn += n
-		}
-	}
-
-	addSize := uint32(wrn)
-	w.wbuf = w.wbuf[:0]
-	offset := w.offset.Load()
-	w.offset.Add(addSize)
-	return offset, nil
-}
-
-func (w *tableWriter) close() error {
-	w.bufWriter = nil
-	w.wbuf = nil
-	w.writer = nil
-	return nil
-}
-
-func (w *tableWriter) fdatasync() error {
-	if err := w.bufWriter.Flush(); err != nil {
-		return err
-	}
-
-	return w.file.Sync()
+func checkIsValueNil(buf []byte) bool {
+	return (buf[0] >> 7) == 1
 }

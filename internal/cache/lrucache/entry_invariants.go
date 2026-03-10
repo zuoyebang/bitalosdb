@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/zuoyebang/bitalosdb/internal/invariants"
+	"github.com/zuoyebang/bitalosdb/v2/internal/invariants"
 )
 
 const entriesGoAllocated = true

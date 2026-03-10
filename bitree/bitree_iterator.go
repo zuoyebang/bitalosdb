@@ -15,34 +15,33 @@
 package bitree
 
 import (
-	"encoding/binary"
-
-	"github.com/zuoyebang/bitalosdb/bitpage"
-	"github.com/zuoyebang/bitalosdb/bitree/bdb"
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/options"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
+	"github.com/zuoyebang/bitalosdb/v2/bitpage"
+	"github.com/zuoyebang/bitalosdb/v2/bitree/bdb"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/kkv"
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
 )
 
 type BitreeIterator struct {
 	btree      *Bitree
-	ops        *options.IterOptions
+	opts       *iterOptions
 	cmp        base.Compare
 	compact    bool
 	err        error
-	iterKey    *base.InternalKey
+	iterKey    *InternalKKVKey
 	iterValue  []byte
-	ikey       *base.InternalKey
+	key        InternalKKVKey
 	value      []byte
 	putPools   []func()
 	lower      []byte
 	upper      []byte
-	bdbIter    *bdb.BdbIterator
+	bdbCursor  *bdb.Cursor
+	bdbTx      *bdb.ReadTx
 	bpageIter  *bitpage.PageIterator
 	bpageIters map[bitpage.PageNum]*bitpage.PageIterator
 }
 
-func (i *BitreeIterator) getKV() (*base.InternalKey, []byte) {
+func (i *BitreeIterator) getKV() (*InternalKKVKey, []byte) {
 	if i.iterKey == nil {
 		return nil, nil
 	}
@@ -52,48 +51,32 @@ func (i *BitreeIterator) getKV() (*base.InternalKey, []byte) {
 	}
 
 	switch i.iterKey.Kind() {
-	case base.InternalKeyKindDelete, base.InternalKeyKindPrefixDelete:
+	case internalKeyKindDelete, internalKeyKindPrefixDelete:
 		return i.iterKey, i.iterValue
-	}
+	default:
+		isSeparate, value, iv := base.DecodeInternalValue(i.iterValue)
+		if !isSeparate {
+			return i.iterKey, value
+		}
 
-	iv := base.DecodeInternalValue(i.iterValue)
-	if iv.Kind() == base.InternalKeyKindSetBithash {
-		if base.CheckValueValidByKeySetBithash(iv.UserValue) {
-			fn := binary.LittleEndian.Uint32(iv.UserValue)
-			value, putPool, err := i.btree.bithashGet(i.iterKey.UserKey, fn)
-			if err == nil {
-				i.value = value
-				iv.SetKind(base.InternalKeyKindSet)
-				if putPool != nil {
-					i.putPools = append(i.putPools, putPool)
-				}
-			} else {
-				i.btree.opts.Logger.Errorf("[BITPAGE %d] BitreeIterator bithashGet fail key:%v fn:%d err:%v", i.btree.index, i.iterKey.UserKey, fn, err)
-				iv.SetKind(base.InternalKeyKindDelete)
-				i.value = nil
-			}
+		if base.CheckValueBithashValid(iv.UserValue) {
+			i.value = iv.UserValue
 		} else {
-			i.btree.opts.Logger.Errorf("[BITPAGE %d] BitreeIterator CheckValueValidByKeySetBithash fail key:%v", i.btree.index, i.iterKey.UserKey)
 			iv.SetKind(base.InternalKeyKindDelete)
 			i.value = nil
 		}
-	} else {
-		i.value = iv.UserValue
-	}
 
-	if i.ikey == nil {
-		i.ikey = new(base.InternalKey)
+		i.iterKey.SetTrailer(iv.Header)
+		i.key.Copy(i.iterKey)
+		return &i.key, i.value
 	}
-	*(i.ikey) = base.MakeInternalKey2(i.iterKey.UserKey, iv.Header)
-
-	return i.ikey, i.value
 }
 
 func (i *BitreeIterator) setBitpageIter(v []byte) bool {
 	pn := bitpage.PageNum(utils.BytesToUint32(v))
 	pageIter, ok := i.bpageIters[pn]
 	if !ok {
-		pageIter = i.btree.newPageIter(pn, i.ops)
+		pageIter = i.btree.newPageIter(pn, i.opts)
 		if pageIter == nil {
 			return false
 		}
@@ -105,7 +88,7 @@ func (i *BitreeIterator) setBitpageIter(v []byte) bool {
 }
 
 func (i *BitreeIterator) findBdbFirst() bool {
-	bdbKey, bdbValue := i.bdbIter.First()
+	bdbKey, bdbValue := i.bdbCursor.First()
 	if bdbKey == nil {
 		return false
 	}
@@ -114,7 +97,7 @@ func (i *BitreeIterator) findBdbFirst() bool {
 }
 
 func (i *BitreeIterator) findBdbLast() bool {
-	bdbKey, bdbValue := i.bdbIter.Last()
+	bdbKey, bdbValue := i.bdbCursor.Last()
 	if bdbKey == nil {
 		return false
 	}
@@ -123,7 +106,7 @@ func (i *BitreeIterator) findBdbLast() bool {
 }
 
 func (i *BitreeIterator) findBdbNext() bool {
-	bdbKey, bdbValue := i.bdbIter.Next()
+	bdbKey, bdbValue := i.bdbCursor.Next()
 	if bdbKey == nil {
 		return false
 	}
@@ -132,7 +115,7 @@ func (i *BitreeIterator) findBdbNext() bool {
 }
 
 func (i *BitreeIterator) findBdbPrev() bool {
-	bdbKey, bdbValue := i.bdbIter.Prev()
+	bdbKey, bdbValue := i.bdbCursor.Prev()
 	if bdbKey == nil {
 		return false
 	}
@@ -141,7 +124,7 @@ func (i *BitreeIterator) findBdbPrev() bool {
 }
 
 func (i *BitreeIterator) findBdbSeekGE(key []byte) bool {
-	bdbKey, bdbValue := i.bdbIter.SeekGE(key)
+	bdbKey, bdbValue := i.bdbCursor.Seek(key)
 	if bdbKey == nil {
 		return false
 	}
@@ -149,7 +132,7 @@ func (i *BitreeIterator) findBdbSeekGE(key []byte) bool {
 	return i.setBitpageIter(bdbValue)
 }
 
-func (i *BitreeIterator) First() (*base.InternalKey, []byte) {
+func (i *BitreeIterator) First() (*InternalKKVKey, []byte) {
 	if !i.findBdbFirst() {
 		return nil, nil
 	}
@@ -162,14 +145,14 @@ func (i *BitreeIterator) First() (*base.InternalKey, []byte) {
 		i.iterKey, i.iterValue = i.bpageIter.First()
 	}
 
-	if i.upper != nil && i.cmp(i.upper, i.iterKey.UserKey) <= 0 {
+	if kkv.IsUserKeyGEUpperBound(i.iterKey, i.upper) {
 		return nil, nil
 	}
 
 	return i.getKV()
 }
 
-func (i *BitreeIterator) Last() (*base.InternalKey, []byte) {
+func (i *BitreeIterator) Last() (*InternalKKVKey, []byte) {
 	if !i.findBdbLast() {
 		return nil, nil
 	}
@@ -182,14 +165,14 @@ func (i *BitreeIterator) Last() (*base.InternalKey, []byte) {
 		i.iterKey, i.iterValue = i.bpageIter.Last()
 	}
 
-	if i.lower != nil && i.cmp(i.lower, i.iterKey.UserKey) > 0 {
+	if kkv.IsUserKeyLTLowerBound(i.iterKey, i.lower) {
 		return nil, nil
 	}
 
 	return i.getKV()
 }
 
-func (i *BitreeIterator) Next() (*base.InternalKey, []byte) {
+func (i *BitreeIterator) Next() (*InternalKKVKey, []byte) {
 	if i.iterKey == nil {
 		return nil, nil
 	}
@@ -202,14 +185,14 @@ func (i *BitreeIterator) Next() (*base.InternalKey, []byte) {
 		i.iterKey, i.iterValue = i.bpageIter.First()
 	}
 
-	if i.upper != nil && i.cmp(i.upper, i.iterKey.UserKey) <= 0 {
+	if kkv.IsUserKeyGEUpperBound(i.iterKey, i.upper) {
 		return nil, nil
 	}
 
 	return i.getKV()
 }
 
-func (i *BitreeIterator) Prev() (*base.InternalKey, []byte) {
+func (i *BitreeIterator) Prev() (*InternalKKVKey, []byte) {
 	if i.iterKey == nil {
 		return nil, nil
 	}
@@ -222,14 +205,14 @@ func (i *BitreeIterator) Prev() (*base.InternalKey, []byte) {
 		i.iterKey, i.iterValue = i.bpageIter.Last()
 	}
 
-	if i.lower != nil && i.cmp(i.lower, i.iterKey.UserKey) > 0 {
+	if kkv.IsUserKeyLTLowerBound(i.iterKey, i.lower) {
 		return nil, nil
 	}
 
 	return i.getKV()
 }
 
-func (i *BitreeIterator) SeekGE(key []byte) (*base.InternalKey, []byte) {
+func (i *BitreeIterator) SeekGE(key []byte) (*InternalKKVKey, []byte) {
 	if !i.findBdbSeekGE(key) {
 		return nil, nil
 	}
@@ -242,14 +225,14 @@ func (i *BitreeIterator) SeekGE(key []byte) (*base.InternalKey, []byte) {
 		i.iterKey, i.iterValue = i.bpageIter.SeekGE(key)
 	}
 
-	if i.upper != nil && i.cmp(i.upper, i.iterKey.UserKey) <= 0 {
+	if kkv.IsUserKeyGEUpperBound(i.iterKey, i.upper) {
 		return nil, nil
 	}
 
 	return i.getKV()
 }
 
-func (i *BitreeIterator) SeekLT(key []byte) (*base.InternalKey, []byte) {
+func (i *BitreeIterator) SeekLT(key []byte) (*InternalKKVKey, []byte) {
 	if !i.findBdbSeekGE(key) {
 		return nil, nil
 	}
@@ -262,17 +245,11 @@ func (i *BitreeIterator) SeekLT(key []byte) (*base.InternalKey, []byte) {
 		i.iterKey, i.iterValue = i.bpageIter.SeekLT(key)
 	}
 
-	if i.lower != nil && i.cmp(i.lower, i.iterKey.UserKey) > 0 {
+	if kkv.IsUserKeyLTLowerBound(i.iterKey, i.lower) {
 		return nil, nil
 	}
 
 	return i.getKV()
-}
-
-func (i *BitreeIterator) SeekPrefixGE(
-	prefix, key []byte, trySeekUsingNext bool,
-) (*base.InternalKey, []byte) {
-	return i.SeekGE(key)
 }
 
 func (i *BitreeIterator) Close() error {
@@ -288,7 +265,7 @@ func (i *BitreeIterator) Close() error {
 		}
 	}
 
-	if err := i.bdbIter.Close(); err != nil && i.err == nil {
+	if err := i.bdbTx.Unref(true); err != nil && i.err == nil {
 		i.err = err
 	}
 

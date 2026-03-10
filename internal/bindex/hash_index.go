@@ -22,7 +22,7 @@ import (
 
 const (
 	MaxLowBit             = 0xFFFF
-	HashIndexShardItemAvg = 1 << 8
+	HashIndexShardItemAvg = 1 << 7
 	HashIndexShardsNum    = 64 << 10
 	HashIndexShardSize    = 4
 	HashIndexItem32Size   = 6

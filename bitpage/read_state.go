@@ -16,18 +16,18 @@ package bitpage
 
 import "sync/atomic"
 
-type readState struct {
+type pageReadState struct {
 	refcnt    atomic.Int32
-	stMutable *superTable
+	stMutable *flushableEntry
 	stQueue   flushableList
 	arrtable  *flushableEntry
 }
 
-func (s *readState) ref() {
+func (s *pageReadState) ref() {
 	s.refcnt.Add(1)
 }
 
-func (s *readState) unref() {
+func (s *pageReadState) unref() {
 	if s.refcnt.Add(-1) != 0 {
 		return
 	}

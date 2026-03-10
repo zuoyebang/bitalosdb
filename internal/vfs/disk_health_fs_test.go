@@ -43,7 +43,7 @@ func (m mockFile) Write(p []byte) (n int, err error) {
 }
 
 func (m mockFile) Seek(offset int64, whence int) (int64, error) {
-	panic("implement me")
+	panic("Not supported")
 }
 
 func (m mockFile) Stat() (os.FileInfo, error) {

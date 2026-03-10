@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zuoyebang/bitalosdb/v2/internal/options"
 	"github.com/stretchr/testify/require"
-	"github.com/zuoyebang/bitalosdb/internal/options"
 	"golang.org/x/exp/rand"
 )
 

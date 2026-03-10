@@ -34,9 +34,9 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/zuoyebang/bitalosdb/bitree/bdb"
-	"github.com/zuoyebang/bitalosdb/internal/consts"
-	"github.com/zuoyebang/bitalosdb/internal/options"
+	"github.com/zuoyebang/bitalosdb/v2/bitree/bdb"
+	"github.com/zuoyebang/bitalosdb/v2/internal/consts"
+	"github.com/zuoyebang/bitalosdb/v2/internal/options"
 )
 
 var statsFlag = flag.Bool("stats", false, "show performance stats")
@@ -597,7 +597,7 @@ func TestDB_Concurrent_WriteTo(t *testing.T) {
 	wg.Add(wtxs * rtxs)
 	f := func(tx *bdb.Tx) {
 		defer wg.Done()
-		f, err := ioutil.TempFile("", "bdb-")
+		f, err := os.CreateTemp("", "bdb-")
 		if err != nil {
 			panic(err)
 		}

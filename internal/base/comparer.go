@@ -36,8 +36,6 @@ type Separator func(dst, a, b []byte) []byte
 
 type Successor func(dst, a []byte) []byte
 
-type Split func(a []byte) int
-
 type Comparer struct {
 	Compare        Compare
 	Equal          Equal
@@ -45,7 +43,6 @@ type Comparer struct {
 	FormatKey      FormatKey
 	FormatValue    FormatValue
 	Separator      Separator
-	Split          Split
 	Successor      Successor
 	Name           string
 }

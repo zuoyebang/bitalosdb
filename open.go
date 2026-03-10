@@ -15,22 +15,18 @@
 package bitalosdb
 
 import (
-	"time"
-
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/bitask"
-	"github.com/zuoyebang/bitalosdb/internal/cache/lfucache"
-	"github.com/zuoyebang/bitalosdb/internal/cache/lrucache"
-	"github.com/zuoyebang/bitalosdb/internal/compress"
-	"github.com/zuoyebang/bitalosdb/internal/consts"
-	"github.com/zuoyebang/bitalosdb/internal/manual"
-	"github.com/zuoyebang/bitalosdb/internal/options"
+	"github.com/zuoyebang/bitalosdb/v2/bitree"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/bitask"
+	"github.com/zuoyebang/bitalosdb/v2/internal/compress"
+	"github.com/zuoyebang/bitalosdb/v2/internal/consts"
+	"github.com/zuoyebang/bitalosdb/v2/internal/options"
 )
 
 func Open(dirname string, opts *Options) (db *DB, err error) {
-	opts = opts.Clone().EnsureDefaults()
-
 	var optsPool *options.OptionsPool
+	opts = opts.Clone().EnsureDefaults()
+	opts.Logger.Infof("open bitalosdb start")
 	if opts.private.optspool == nil {
 		optsPool = opts.ensureOptionsPool(nil)
 	} else {
@@ -38,47 +34,26 @@ func Open(dirname string, opts *Options) (db *DB, err error) {
 	}
 
 	d := &DB{
-		dirname:             dirname,
-		walDirname:          opts.WALDir,
-		opts:                opts,
-		optspool:            optsPool,
-		cmp:                 opts.Comparer.Compare,
-		equal:               opts.Comparer.Equal,
-		split:               opts.Comparer.Split,
-		largeBatchThreshold: (opts.MemTableSize - int(memTableEmptySize)) / 2,
-		timeNow:             time.Now,
-		compressor:          compress.SetCompressor(opts.CompressionType),
-		cache:               nil,
-		dbState:             optsPool.DbState,
-		taskClosed:          make(chan struct{}),
-		meta:                &metaSet{},
+		dirname:    dirname,
+		opts:       opts,
+		optspool:   optsPool,
+		cmp:        opts.Comparer.Compare,
+		equal:      opts.Comparer.Equal,
+		compressor: compress.SetCompressor(opts.CompressionType),
+		dbState:    optsPool.DbState,
+		meta:       &metadata{},
+		taskClosed: make(chan struct{}),
+		flushStats: NewFlushStats(),
 	}
 
-	defer func() {
-		if r := recover(); db == nil {
-			d.closeTask()
+	for i := range d.bituples {
+		d.bituples[i] = newSlotBituple(d)
+	}
 
-			for i := range d.bitowers {
-				if d.bitowers[i] != nil {
-					for _, mem := range d.bitowers[i].mu.mem.queue {
-						switch t := mem.flushable.(type) {
-						case *memTable:
-							manual.Free(t.arenaBuf)
-							t.arenaBuf = nil
-						}
-					}
-				}
-			}
-
-			if d.cache != nil {
-				d.cache.Close()
-			}
-
-			if r != any(nil) {
-				panic(r)
-			}
-		}
-	}()
+	d.memFlusher = &memFlushWriter{
+		db:      d,
+		writers: make(map[uint16]*bitree.BitreeWriter, metaSlotNum),
+	}
 
 	if err = opts.FS.MkdirAll(dirname, 0755); err != nil {
 		return nil, err
@@ -86,9 +61,6 @@ func Open(dirname string, opts *Options) (db *DB, err error) {
 	d.dataDir, err = opts.FS.OpenDir(dirname)
 	if err != nil {
 		return nil, err
-	}
-	if d.walDirname == "" {
-		d.walDirname = d.dirname
 	}
 	fileLock, err := opts.FS.Lock(base.MakeFilepath(opts.FS, dirname, fileTypeLock, 0))
 	if err != nil {
@@ -101,61 +73,135 @@ func Open(dirname string, opts *Options) (db *DB, err error) {
 		}
 	}()
 
-	if err = d.meta.init(dirname, opts); err != nil {
+	if d.meta, err = openMetadata(dirname, opts); err != nil {
 		return nil, err
 	}
-	oldLogSeqNum := d.meta.atomic.logSeqNum
-	d.initFlushedBitable()
 
-	if opts.CacheSize > 0 {
-		cacheOpts := &options.CacheOptions{
-			Size:     opts.CacheSize,
-			Shards:   opts.CacheShards,
-			HashSize: opts.CacheHashSize,
-			Logger:   opts.Logger,
-		}
-		if opts.CacheType == consts.CacheTypeLfu {
-			d.cache = lfucache.New(cacheOpts)
-		} else {
-			d.cache = lrucache.New(cacheOpts)
-		}
-	}
+	d.vmFlushTask = bitask.NewVmTableFlushTask(&bitask.VmTableFlushTaskOptions{
+		Size:      consts.VmTableTaskSize,
+		WorkerNum: consts.VmTbaleTaskWorkerNum,
+		Logger:    d.opts.Logger,
+		DoFunc:    d.doVmTableFlushTask,
+		TaskWg:    &d.taskWg,
+	})
 
-	d.memFlushTask = bitask.NewMemFlushTask(&bitask.MemFlushTaskOptions{
-		Size:   consts.DefaultBitowerNum * 6,
+	d.memFlushTask = bitask.NewMemTableFlushTask(&bitask.MemTableFlushTaskOptions{
+		Size:   consts.MemTableTaskSize,
 		Logger: d.opts.Logger,
-		DoFunc: d.doMemFlushTask,
+		DoFunc: d.doMemTableFlushTask,
 		TaskWg: &d.taskWg,
 	})
 
 	d.bpageTask = bitask.NewBitpageTask(&bitask.BitpageTaskOptions{
-		Size:    consts.DefaultBitowerNum * 1000,
-		DbState: d.optspool.DbState,
-		Logger:  opts.Logger,
-		DoFunc:  d.doBitpageTask,
-		TaskWg:  &d.taskWg,
+		Size:      consts.BitpageTaskSize,
+		WorkerNum: d.opts.BitpageTaskWorkerNum,
+		Logger:    opts.Logger,
+		DoFunc:    d.doBitreeTask,
+		TaskWg:    &d.taskWg,
 	})
 	d.optspool.BaseOptions.BitpageTaskPushFunc = d.bpageTask.PushTask
 
-	for i := range d.bitowers {
-		if err = openBitower(d, i); err != nil {
-			return nil, err
+	d.newVmTable()
+	d.newMemTable()
+
+	for idx, status := range d.meta.slotsStatus {
+		if status == slotBitupleCreated {
+			if err = d.bituples[idx].createBituple(idx, slotBitupleCreated); err != nil {
+				return nil, err
+			}
 		}
 	}
 
-	if d.opts.AutoCompact {
-		d.runCompactTask()
+	d.expandBitupleShard()
+
+	if err = d.newEliminateTask(); err != nil {
+		return nil, err
 	}
 
-	for i := range d.bitowers {
-		d.bitowers[i].btree.MaybeScheduleFlush(false)
-	}
+	d.runVtGCTask()
+	d.runBithashGCTask()
 
-	d.meta.atomic.visibleSeqNum = d.meta.atomic.logSeqNum
 	d.fileLock, fileLock = fileLock, nil
-
-	d.opts.Logger.Infof("open bitalosdb success memSize:%d logSeqNum:%d oldLogSeqNum:%d",
-		d.opts.MemTableSize, d.meta.atomic.logSeqNum, oldLogSeqNum)
+	d.opts.Logger.Infof("open bitalosdb success opts:%+v", d.opts)
 
 	return d, nil
+}
+
+func (d *DB) expandBitupleShard() {
+	if d.meta.tupleCount == d.opts.VectorTableCount {
+		return
+	} else if d.opts.VectorTableCount < d.meta.tupleCount {
+		d.opts.Logger.Infof("expandBitupleShard not support shrink from %d to %d", d.meta.tupleCount, d.opts.VectorTableCount)
+		return
+	}
+
+	var oldTupleList, newTupleList []*Tuple
+	expandTupleCount := d.opts.VectorTableCount
+	oldTupleCount := d.meta.tupleCount
+	tsr := d.meta.splitTupleShardRanges(expandTupleCount)
+	d.opts.Logger.Infof("expandBitupleShard from %d to %d start", oldTupleCount, expandTupleCount)
+
+	for i := range d.bituples {
+		bt := d.getBitupleSafe(i)
+		if bt == nil || bt.isEliminate() {
+			continue
+		}
+
+		tupleList := make([]*Tuple, expandTupleCount)
+		newTupleId := d.meta.tupleNextId
+		for j := uint16(0); j < expandTupleCount; j++ {
+			tp, err := newTuple(bt, newTupleId, nil)
+			if err != nil {
+				d.opts.Logger.Errorf("expandBitupleShard tuple(%d-%d) new panic err:%s", bt.index, newTupleId, err)
+				for _, ntp := range newTupleList {
+					ntp.close(true)
+				}
+				return
+			}
+
+			newTupleList = append(newTupleList, tp)
+			tupleList[j] = tp
+			newTupleId++
+			d.opts.Logger.Infof("expandBitupleShard tuple(%d-%d) new success", tp.index, tp.tn)
+		}
+
+		for j := uint16(0); j < expandTupleCount; j++ {
+			for k := tsr[j].start; k <= tsr[j].end; k++ {
+				bt.tupleShards[k] = tupleList[j]
+			}
+		}
+
+		oldTupleList = append(oldTupleList, bt.tupleList...)
+		iter := bt.NewBitupleIter()
+		bt.tupleList = tupleList
+		bt.tupleCount = expandTupleCount
+		key, hi, lo, seqNum, dataType, ts, version, slotId, size, pre, next, value, final := iter.First()
+		for ; !final; key, hi, lo, seqNum, dataType, ts, version, slotId, size, pre, next, value, final = iter.Next() {
+			tuple := bt.getHashTuple(lo)
+			if err := tuple.vt.Set(key, hi, lo, seqNum, dataType, ts, slotId, version, size, pre, next, value); err != nil {
+				d.opts.Logger.Errorf("expandBitupleShard set (%d-%d) fail key:%s err:%s",
+					bt.index, tuple.index, string(key), err)
+			}
+		}
+		iter.Close()
+
+		for _, tp := range bt.tupleList {
+			tp.vt.MSync()
+		}
+
+		d.opts.Logger.Infof("expandBitupleShard bituple(%d) success", bt.index)
+	}
+
+	d.meta.writeTupleShardRanges(tsr)
+
+	for _, tp := range oldTupleList {
+		tp.close(true)
+		d.opts.Logger.Infof("expandBitupleShard tuple(%d-%d) free success", tp.index, tp.tn)
+	}
+
+	oldTupleList = nil
+	newTupleList = nil
+
+	d.opts.Logger.Infof("expandBitupleShard from %d to %d finish", oldTupleCount, expandTupleCount)
+	return
 }

@@ -24,8 +24,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
-
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/kkv"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/exp/rand"
 )
@@ -34,7 +34,7 @@ const arenaSize = 1 << 20
 
 type iterAdapter struct {
 	*Iterator
-	key *base.InternalKey
+	key *InternalKKVKey
 	val []byte
 }
 
@@ -44,7 +44,7 @@ func newIterAdapter(iter *Iterator) *iterAdapter {
 	}
 }
 
-func (i *iterAdapter) update(key *base.InternalKey, val []byte) bool {
+func (i *iterAdapter) update(key *InternalKKVKey, val []byte) bool {
 	i.key = key
 	i.val = val
 	return i.key != nil
@@ -56,10 +56,6 @@ func (i *iterAdapter) String() string {
 
 func (i *iterAdapter) SeekGE(key []byte) bool {
 	return i.update(i.Iterator.SeekGE(key))
-}
-
-func (i *iterAdapter) SeekPrefixGE(prefix, key []byte, trySeekUsingNext bool) bool {
-	return i.update(i.Iterator.SeekPrefixGE(prefix, key, trySeekUsingNext))
 }
 
 func (i *iterAdapter) SeekLT(key []byte) bool {
@@ -83,7 +79,11 @@ func (i *iterAdapter) Prev() bool {
 }
 
 func (i *iterAdapter) Key() base.InternalKey {
-	return *i.key
+	return base.MakeInternalKey2(i.key.MakeUserKey(), i.key.Trailer)
+}
+
+func (i *iterAdapter) GetSubKey() []byte {
+	return i.key.SubKey
 }
 
 func (i *iterAdapter) Value() []byte {
@@ -95,15 +95,16 @@ func (i *iterAdapter) Valid() bool {
 }
 
 func makeIntKey(i int) base.InternalKey {
-	return base.InternalKey{UserKey: []byte(fmt.Sprintf("%05d", i))}
+	kkvKey := kkv.EncodeSubKey([]byte(fmt.Sprintf("%05d", i)), kkv.DataTypeHash, 1)
+	return base.InternalKey{UserKey: kkvKey}
 }
 
 func makeKey(s string) []byte {
-	return []byte(s)
+	return kkv.EncodeSubKey([]byte(s), kkv.DataTypeHash, 1)
 }
 
 func makeIkey(s string) base.InternalKey {
-	return base.InternalKey{UserKey: []byte(s)}
+	return base.InternalKey{UserKey: makeKey(s)}
 }
 
 func makeValue(i int) []byte {
@@ -214,15 +215,15 @@ func TestBasic(t *testing.T) {
 			require.NotEqual(t, "key", it.Key().UserKey)
 
 			require.True(t, it.SeekGE(makeKey("key1")))
-			require.EqualValues(t, "key1", it.Key().UserKey)
+			require.EqualValues(t, makeKey("key1"), it.Key().UserKey)
 			require.EqualValues(t, makeValue(1), it.Value())
 
 			require.True(t, it.SeekGE(makeKey("key2")))
-			require.EqualValues(t, "key2", it.Key().UserKey)
+			require.EqualValues(t, makeKey("key2"), it.Key().UserKey)
 			require.EqualValues(t, makeValue(2), it.Value())
 
 			require.True(t, it.SeekGE(makeKey("key3")))
-			require.EqualValues(t, "key3", it.Key().UserKey)
+			require.EqualValues(t, makeKey("key3"), it.Key().UserKey)
 			require.EqualValues(t, makeValue(3), it.Value())
 
 			key := makeIkey("a")
@@ -233,12 +234,12 @@ func TestBasic(t *testing.T) {
 
 			require.True(t, it.SeekGE(makeKey("a")))
 			require.True(t, it.Valid())
-			require.EqualValues(t, "a", it.Key().UserKey)
+			require.EqualValues(t, makeKey("a"), it.Key().UserKey)
 			require.EqualValues(t, 2, it.Key().SeqNum())
 
 			require.True(t, it.Next())
 			require.True(t, it.Valid())
-			require.EqualValues(t, "a", it.Key().UserKey)
+			require.EqualValues(t, makeKey("a"), it.Key().UserKey)
 			require.EqualValues(t, 1, it.Key().SeqNum())
 
 			key = makeIkey("b")
@@ -249,12 +250,12 @@ func TestBasic(t *testing.T) {
 
 			require.True(t, it.SeekGE(makeKey("b")))
 			require.True(t, it.Valid())
-			require.EqualValues(t, "b", it.Key().UserKey)
+			require.EqualValues(t, makeKey("b"), it.Key().UserKey)
 			require.EqualValues(t, 2, it.Key().SeqNum())
 
 			require.True(t, it.Next())
 			require.True(t, it.Valid())
-			require.EqualValues(t, "b", it.Key().UserKey)
+			require.EqualValues(t, makeKey("b"), it.Key().UserKey)
 			require.EqualValues(t, 1, it.Key().SeqNum())
 		})
 	}
@@ -290,8 +291,9 @@ func TestConcurrentBasic(t *testing.T) {
 					defer wg.Done()
 
 					it := newIterAdapter(l.NewIter(nil, nil))
-					require.True(t, it.SeekGE(makeKey(fmt.Sprintf("%05d", i))))
-					require.EqualValues(t, fmt.Sprintf("%05d", i), it.Key().UserKey)
+					ik := makeIntKey(i)
+					require.True(t, it.SeekGE(ik.UserKey))
+					require.EqualValues(t, ik.UserKey, it.Key().UserKey)
 				}(i)
 			}
 			wg.Wait()
@@ -303,8 +305,9 @@ func TestConcurrentBasic(t *testing.T) {
 
 func TestConcurrentOneKey(t *testing.T) {
 	const n = 100
-	key := makeKey("thekey")
-	ikey := makeIkey("thekey")
+	key := []byte("thekey")
+	kkvKey := kkv.EncodeSubKey(key, kkv.DataTypeHash, 1)
+	ikey := base.InternalKey{UserKey: kkvKey}
 
 	for _, inserter := range []bool{false, true} {
 		t.Run(fmt.Sprintf("inserter=%t", inserter), func(t *testing.T) {
@@ -340,9 +343,10 @@ func TestConcurrentOneKey(t *testing.T) {
 					defer wg.Done()
 
 					it := newIterAdapter(l.NewIter(nil, nil))
-					it.SeekGE(key)
+					it.SeekGE(kkvKey)
 					require.True(t, it.Valid())
-					require.True(t, bytes.Equal(key, it.Key().UserKey))
+					require.Equal(t, kkvKey, it.Key().UserKey)
+					require.Equal(t, key, it.GetSubKey())
 
 					atomic.AddInt32(&sawValue, 1)
 					v, err := strconv.Atoi(string(it.Value()[1:]))
@@ -372,7 +376,7 @@ func TestSkiplistAdd(t *testing.T) {
 			err := add(base.InternalKey{}, nil)
 			require.Nil(t, err)
 			require.True(t, it.SeekGE([]byte{}))
-			require.EqualValues(t, []byte{}, it.Key().UserKey)
+			require.EqualValues(t, []byte{}, it.GetSubKey())
 			require.EqualValues(t, []byte{}, it.Value())
 
 			l = NewSkiplist(newArena(arenaSize), bytes.Compare)
@@ -385,37 +389,41 @@ func TestSkiplistAdd(t *testing.T) {
 
 			err = add(makeIkey(""), []byte{})
 			require.Nil(t, err)
-			require.True(t, it.SeekGE([]byte{}))
-			require.EqualValues(t, []byte{}, it.Key().UserKey)
+			require.True(t, it.SeekGE(makeKey("")))
+			require.EqualValues(t, makeKey(""), it.Key().UserKey)
 			require.EqualValues(t, []byte{}, it.Value())
 
-			err = add(makeIntKey(2), makeValue(2))
+			ikey := makeIntKey(2)
+			err = add(ikey, makeValue(2))
 			require.Nil(t, err)
-			require.True(t, it.SeekGE(makeKey("00002")))
-			require.EqualValues(t, "00002", it.Key().UserKey)
+			require.True(t, it.SeekGE(ikey.UserKey))
+			require.EqualValues(t, ikey, it.Key())
 			require.EqualValues(t, makeValue(2), it.Value())
 
-			err = add(makeIntKey(1), makeValue(1))
+			ikey = makeIntKey(1)
+			err = add(ikey, makeValue(1))
 			require.Nil(t, err)
-			require.True(t, it.SeekGE(makeKey("00001")))
-			require.EqualValues(t, "00001", it.Key().UserKey)
+			require.True(t, it.SeekGE(ikey.UserKey))
+			require.EqualValues(t, ikey, it.Key())
 			require.EqualValues(t, makeValue(1), it.Value())
 
-			err = add(makeIntKey(4), makeValue(4))
+			ikey = makeIntKey(4)
+			err = add(ikey, makeValue(4))
 			require.Nil(t, err)
-			require.True(t, it.SeekGE(makeKey("00004")))
-			require.EqualValues(t, "00004", it.Key().UserKey)
+			require.True(t, it.SeekGE(ikey.UserKey))
+			require.EqualValues(t, ikey, it.Key())
 			require.EqualValues(t, makeValue(4), it.Value())
 
-			err = add(makeIntKey(3), makeValue(3))
+			ikey = makeIntKey(3)
+			err = add(ikey, makeValue(3))
 			require.Nil(t, err)
-			require.True(t, it.SeekGE(makeKey("00003")))
-			require.EqualValues(t, "00003", it.Key().UserKey)
+			require.True(t, it.SeekGE(ikey.UserKey))
+			require.EqualValues(t, ikey, it.Key())
 			require.EqualValues(t, makeValue(3), it.Value())
 
 			err = add(makeIntKey(2), nil)
-			require.Equal(t, ErrRecordExists, err)
-			require.EqualValues(t, "00003", it.Key().UserKey)
+			require.Equal(t, base.ErrRecordExists, err)
+			require.EqualValues(t, makeIntKey(3), it.Key())
 			require.EqualValues(t, makeValue(3), it.Value())
 
 			require.Equal(t, 5, length(l))
@@ -520,86 +528,6 @@ func TestIteratorPrev(t *testing.T) {
 		it.Prev()
 	}
 	require.False(t, it.Valid())
-}
-
-func TestIteratorSeekGEAndSeekPrefixGE(t *testing.T) {
-	const n = 100
-	l := NewSkiplist(newArena(arenaSize), bytes.Compare)
-	it := newIterAdapter(l.NewIter(nil, nil))
-
-	require.False(t, it.Valid())
-	it.First()
-	require.False(t, it.Valid())
-
-	var ins Inserter
-	for i := n - 1; i >= 0; i-- {
-		v := i*10 + 1000
-		ins.Add(l, makeIntKey(v), makeValue(v))
-	}
-
-	require.True(t, it.SeekGE(makeKey("")))
-	require.True(t, it.Valid())
-	require.EqualValues(t, "01000", it.Key().UserKey)
-	require.EqualValues(t, "v01000", it.Value())
-
-	require.True(t, it.SeekGE(makeKey("01000")))
-	require.True(t, it.Valid())
-	require.EqualValues(t, "01000", it.Key().UserKey)
-	require.EqualValues(t, "v01000", it.Value())
-
-	require.True(t, it.SeekGE(makeKey("01005")))
-	require.True(t, it.Valid())
-	require.EqualValues(t, "01010", it.Key().UserKey)
-	require.EqualValues(t, "v01010", it.Value())
-
-	require.True(t, it.SeekGE(makeKey("01010")))
-	require.True(t, it.Valid())
-	require.EqualValues(t, "01010", it.Key().UserKey)
-	require.EqualValues(t, "v01010", it.Value())
-
-	require.False(t, it.SeekGE(makeKey("99999")))
-	require.False(t, it.Valid())
-
-	{
-		require.True(t, it.SeekPrefixGE(makeKey("01000"), makeKey("01000"), false))
-		require.True(t, it.Valid())
-		require.EqualValues(t, "01000", it.Key().UserKey)
-		require.EqualValues(t, "v01000", it.Value())
-
-		require.True(t, it.SeekPrefixGE(makeKey("01000"), makeKey("01000"), true))
-		require.True(t, it.Valid())
-		require.EqualValues(t, "01000", it.Key().UserKey)
-		require.EqualValues(t, "v01000", it.Value())
-
-		require.True(t, it.SeekPrefixGE(makeKey("01020"), makeKey("01020"), true))
-		require.True(t, it.Valid())
-		require.EqualValues(t, "01020", it.Key().UserKey)
-		require.EqualValues(t, "v01020", it.Value())
-
-		require.True(t, it.SeekPrefixGE(makeKey("01200"), makeKey("01200"), true))
-		require.True(t, it.Valid())
-		require.EqualValues(t, "01200", it.Key().UserKey)
-		require.EqualValues(t, "v01200", it.Value())
-
-		require.True(t, it.SeekPrefixGE(makeKey("01100"), makeKey("01100"), true))
-		require.True(t, it.Valid())
-		require.EqualValues(t, "01200", it.Key().UserKey)
-		require.EqualValues(t, "v01200", it.Value())
-
-		require.True(t, it.SeekPrefixGE(makeKey("01100"), makeKey("01100"), false))
-		require.True(t, it.Valid())
-		require.EqualValues(t, "01100", it.Key().UserKey)
-		require.EqualValues(t, "v01100", it.Value())
-	}
-
-	ins.Add(l, base.InternalKey{}, nil)
-	require.True(t, it.SeekGE([]byte{}))
-	require.True(t, it.Valid())
-	require.EqualValues(t, "", it.Key().UserKey)
-
-	require.True(t, it.SeekGE(makeKey("")))
-	require.True(t, it.Valid())
-	require.EqualValues(t, "", it.Key().UserKey)
 }
 
 func TestIteratorSeekLT(t *testing.T) {
@@ -828,41 +756,6 @@ func BenchmarkIterPrev(b *testing.B) {
 			key, _ = it.Last()
 		}
 		_ = key
-	}
-}
-
-func BenchmarkSeekPrefixGE(b *testing.B) {
-	l := NewSkiplist(newArena(64<<10), bytes.Compare)
-	var count int
-	for count = 0; ; count++ {
-		if err := l.Add(makeIntKey(count), makeValue(count)); err == ErrArenaFull {
-			break
-		}
-	}
-	for _, skip := range []int{1, 2, 4, 8, 16} {
-		for _, useNext := range []bool{false, true} {
-			b.Run(fmt.Sprintf("skip=%d/use-next=%t", skip, useNext), func(b *testing.B) {
-				it := l.NewIter(nil, nil)
-				j := 0
-				var k []byte
-				makeKey := func() {
-					k = []byte(fmt.Sprintf("%05d", j))
-				}
-				makeKey()
-				it.SeekPrefixGE(k, k, false)
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
-					j += skip
-					trySeekUsingNext := useNext
-					if j >= count {
-						j = 0
-						trySeekUsingNext = false
-					}
-					makeKey()
-					it.SeekPrefixGE(k, k, trySeekUsingNext)
-				}
-			})
-		}
 	}
 }
 

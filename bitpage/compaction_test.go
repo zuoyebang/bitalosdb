@@ -15,433 +15,388 @@
 package bitpage
 
 import (
-	"fmt"
+	"bytes"
 	"os"
 	"testing"
+	"time"
 
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/hash"
+	"github.com/zuoyebang/bitalosdb/v2/internal/kkv"
+	"github.com/zuoyebang/bitalosdb/v2/internal/os2"
+	"github.com/zuoyebang/bitalosdb/v2/internal/sortedkv"
 	"github.com/stretchr/testify/require"
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/hash"
-	"github.com/zuoyebang/bitalosdb/internal/sortedkv"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
 )
 
-func TestBitpageCompact_Flush(t *testing.T) {
-	testcase(func(index int, params []bool) {
-		dir := testDir
-		defer os.RemoveAll(dir)
-		os.RemoveAll(dir)
+func TestBitpageFlush(t *testing.T) {
+	dir := testDir
+	defer os.RemoveAll(dir)
+	os.RemoveAll(dir)
 
-		var endIndex int
-		num := 10
-		stepCount := 10
-		seqNum := uint64(1)
-		count := (num + 2) * stepCount
-		kvList := testMakeSortedKV(count, seqNum, 10)
-		seqNum += uint64(count)
+	var endIndex int
+	seqNum := uint64(1)
+	loop := 10
+	kn := 5
+	kkn := 5
+	mn := 5
+	vs := 100
+	kvList := sortedkv.MakeSortedAllKVList(kn, kkn, mn, vs, seqNum)
+	count := len(kvList)
+	seqNum += uint64(count)
+	stepCount := count / (loop + 2)
 
-		writeData := func(bp *Bitpage, pn PageNum) {
-			wr := bp.GetPageWriter(pn, nil)
-
-			startIndex := endIndex
-			endIndex = startIndex + stepCount
-
-			for i := startIndex; i < endIndex; i++ {
-				if i%3 == 0 {
-					kvList[i].Key.SetKind(internalKeyKindDelete)
-					kvList[i].Value = []byte{}
-				}
-				require.NoError(t, wr.Set(*kvList[i].Key, kvList[i].Value))
-			}
-			require.NoError(t, wr.FlushFinish())
-		}
-
-		readData := func(pg *page) {
-			for i := 0; i < endIndex; i++ {
-				key := kvList[i].Key.UserKey
-				v, vexist, vcloser, kind := pg.get(key, hash.Crc32(key))
-				if i%3 == 0 {
-					require.Equal(t, false, vexist)
-				} else {
-					require.Equal(t, kvList[i].Value, v)
-					require.Equal(t, internalKeyKindSet, kind)
-					vcloser()
-				}
-			}
-		}
-
-		bp, err := testOpenBitpage(true)
-		require.NoError(t, err)
-		pn, err1 := bp.NewPage()
-		require.NoError(t, err1)
-
-		writeData(bp, pn)
-		p := bp.GetPage(pn)
-
-		iter := p.newIter(nil)
-		require.NoError(t, p.flush(nil, ""))
-		require.NoError(t, iter.Close())
-
-		writeData(bp, pn)
-		readData(p)
-		testCloseBitpage(t, bp)
-
-		for i := 0; i < num; i++ {
-			fmt.Println("for start", i)
-			bp2, err2 := testOpenBitpage(true)
-			require.NoError(t, err2)
-			writeData(bp2, pn)
-			p2 := bp2.GetPage(pn)
-			require.NoError(t, p2.flush(nil, ""))
-			readData(bp2.GetPage(pn))
-			testCloseBitpage(t, bp2)
-		}
-	})
-}
-
-func TestBitpageCompact_Flush_TableFull(t *testing.T) {
-	testcase(func(index int, params []bool) {
-		dir := testDir
-		defer os.RemoveAll(dir)
-		os.RemoveAll(dir)
-
-		var endIndex int
-		stepCount := 15000
-		seqNum := uint64(1)
-		count := 2 * stepCount
-		kvList := testMakeSortedKV(count, seqNum, 100)
-		seqNum += uint64(count)
-
-		writeData := func(bp *Bitpage, pn PageNum) {
-			wr := bp.GetPageWriter(pn, nil)
-
-			startIndex := endIndex
-			endIndex = startIndex + stepCount
-			for i := startIndex; i < endIndex; i++ {
-				if i%3 == 0 {
-					kvList[i].Key.SetKind(internalKeyKindDelete)
-					kvList[i].Value = []byte{}
-				}
-				require.NoError(t, wr.Set(*kvList[i].Key, kvList[i].Value))
-			}
-			require.NoError(t, wr.FlushFinish())
-			require.Equal(t, true, wr.MaybePageFlush(1<<20))
-		}
-
-		readData := func(pg *page) {
-			for i := 0; i < endIndex; i++ {
-				key := kvList[i].Key.UserKey
-				v, vexist, vcloser, kind := pg.get(key, hash.Crc32(key))
-				if i%3 == 0 {
-					require.Equal(t, false, vexist)
-				} else {
-					require.Equal(t, kvList[i].Value, v)
-					require.Equal(t, internalKeyKindSet, kind)
-					vcloser()
-				}
-			}
-		}
-
-		bp, err := testOpenBitpage(true)
-		require.NoError(t, err)
-		pn, err1 := bp.NewPage()
-		require.NoError(t, err1)
-		p := bp.GetPage(pn)
-
-		require.Equal(t, 1, len(p.mu.stQueue))
-		writeData(bp, pn)
-		require.NoError(t, p.flush(nil, ""))
-		require.Equal(t, 1, len(p.mu.stQueue))
-		require.Equal(t, pageFlushStateFinish, p.getFlushState())
-		p.setFlushState(pageFlushStateNone)
-		writeData(bp, pn)
-		require.NoError(t, p.flush(nil, ""))
-		require.Equal(t, 1, len(p.mu.stQueue))
-		require.Equal(t, pageFlushStateFinish, p.getFlushState())
-		readData(p)
-		testCloseBitpage(t, bp)
-
-		bp1, err2 := testOpenBitpage(true)
-		require.NoError(t, err2)
-		p1 := bp1.GetPage(pn)
-		readData(p1)
-		testCloseBitpage(t, bp1)
-	})
-}
-
-func TestBitpageCompact_Split(t *testing.T) {
-	testcase(func(index int, params []bool) {
-		dir := testDir
-		defer os.RemoveAll(dir)
-		os.RemoveAll(dir)
-
-		bp, err := testOpenBitpage2(dir, params[0], params[1], params[2])
-		require.NoError(t, err)
-		pn, err1 := bp.NewPage()
-		require.NoError(t, err1)
-
-		seqNum := uint64(1)
-		count := 50000
-		kvList := testMakeSortedKV(count, seqNum, 100)
-		seqNum += uint64(count)
+	writeData := func(bp *Bitpage, pn PageNum) {
 		wr := bp.GetPageWriter(pn, nil)
 
-		for i := 0; i < count; i++ {
-			require.NoError(t, wr.Set(*kvList[i].Key, kvList[i].Value))
-		}
-		require.NoError(t, wr.FlushFinish())
+		startIndex := endIndex
+		endIndex = startIndex + stepCount
 
-		p := bp.GetPage(pn)
-		require.NoError(t, p.flush(nil, ""))
-
-		bp.opts.BitpageSplitSize = 1 << 18
-		sps, err2 := bp.PageSplitStart(pn, "test")
-		require.NoError(t, err2)
-		bp.PageSplitEnd(pn, sps, nil)
-
-		spsPn := 2
-		for i := range sps {
-			require.Equal(t, PageNum(spsPn), sps[i].Pn)
-			spsPn++
-			fmt.Println("sp:", i, spsPn, string(sps[i].Sentinel))
-		}
-
-		pfiles := p.getFilesPath()
-		require.NoError(t, bp.FreePage(pn, true))
-		bp.opts.DeleteFilePacer.Flush()
-		for i := range pfiles {
-			if utils.IsFileExist(pfiles[i]) {
-				t.Fatalf("%s is not delete", pfiles[i])
+		for i := startIndex; i < endIndex; i++ {
+			if i%3 == 0 {
+				kvList[i].Key.SetKind(internalKeyKindDelete)
+				kvList[i].Value = nil
 			}
-		}
-
-		testCloseBitpage(t, bp)
-	})
-}
-
-func TestBitpageCompact_FlushArrayTableEmpty(t *testing.T) {
-	testcase(func(index int, params []bool) {
-		dir := testDir
-		defer os.RemoveAll(dir)
-		os.RemoveAll(dir)
-
-		bp, err := testOpenBitpage(true)
-		require.NoError(t, err)
-		pn, err1 := bp.NewPage()
-		require.NoError(t, err1)
-
-		seqNum := uint64(1)
-		count := 100
-		kvList := testMakeSortedKV(count, seqNum, 10)
-		seqNum += uint64(count)
-		wr := bp.GetPageWriter(pn, nil)
-
-		for i := 0; i < 100; i++ {
 			require.NoError(t, wr.Set(*kvList[i].Key, kvList[i].Value))
 		}
 		require.NoError(t, wr.FlushFinish())
+	}
 
-		p := bp.GetPage(pn)
-
-		require.NoError(t, p.flush(nil, "111"))
-
-		wr = bp.GetPageWriter(pn, nil)
-		for i := 0; i < 100; i++ {
-			kvList[i].Key.SetKind(internalKeyKindDelete)
-			kvList[i].Key.SetSeqNum(seqNum)
-			seqNum++
-			require.NoError(t, wr.Set(*kvList[i].Key, kvList[i].Value))
-		}
-		require.NoError(t, wr.FlushFinish())
-
-		require.NoError(t, p.flush(nil, "222"))
-		if p.mu.arrtable != nil {
-			t.Fatal("arrtable is not nil")
-		}
-
-		for i := 0; i < 100; i++ {
-			key := makeTestKey(i)
-			_, vexist, vcloser, _ := p.get(key, hash.Crc32(key))
-			require.Equal(t, false, vexist)
-			if vcloser != nil {
+	readData := func(pg *page) {
+		for i := 0; i < endIndex; i++ {
+			key := kvList[i].Key.UserKey
+			v, vexist, vcloser, kind := pg.get(key, kvList[i].KeyHash)
+			if i%3 == 0 {
+				require.Equal(t, false, vexist)
+			} else {
+				require.Equal(t, true, vexist)
+				require.Equal(t, kvList[i].Value, v)
+				require.Equal(t, internalKeyKindSet, kind)
 				vcloser()
 			}
 		}
+	}
 
-		wr = bp.GetPageWriter(pn, nil)
-		for i := 0; i < 100; i++ {
-			kvList[i].Key.SetKind(internalKeyKindSet)
+	bp, err := testOpenBitpage()
+	require.NoError(t, err)
+	pn, err1 := bp.NewPage()
+	require.NoError(t, err1)
+
+	writeData(bp, pn)
+	p := bp.GetPage(pn)
+
+	iter := p.newIter(nil)
+	require.NoError(t, p.flush(nil))
+	require.NoError(t, iter.Close())
+
+	writeData(bp, pn)
+	readData(p)
+	testCloseBitpage(t, bp)
+
+	for i := 0; i < loop; i++ {
+		bp2, err2 := testOpenBitpage()
+		require.NoError(t, err2)
+		writeData(bp2, pn)
+		p2 := bp2.GetPage(pn)
+		require.NoError(t, p2.flush(nil))
+		readData(bp2.GetPage(pn))
+		testCloseBitpage(t, bp2)
+	}
+}
+
+func TestBitpagePreFlush(t *testing.T) {
+	dir := testDir
+	defer os.RemoveAll(dir)
+	os.RemoveAll(dir)
+
+	seqNum := uint64(1)
+	kn := 1000
+	kkn := 10
+	mn := 1
+	vs := 10240
+	kvList := sortedkv.MakeSortedAllKVList(kn, kkn, mn, vs, seqNum)
+	count := len(kvList)
+	seqNum += uint64(count)
+
+	bp, err := testOpenBitpage()
+	require.NoError(t, err)
+	pn, err1 := bp.NewPage()
+	require.NoError(t, err1)
+	p := bp.GetPage(pn)
+
+	wr := bp.GetPageWriter(pn, nil)
+	for i := 0; i < count; i++ {
+		require.NoError(t, wr.Set(*kvList[i].Key, kvList[i].Value))
+	}
+	require.NoError(t, wr.FlushFinish())
+	require.NoError(t, p.flush(nil))
+	require.Equal(t, pageFlushStateFinish, p.getFlushState())
+	p.setFlushState(pageFlushStateNone)
+	wr = bp.GetPageWriter(pn, nil)
+	for i := 0; i < count; i++ {
+		seqNum++
+		if i%3 == 0 {
+			kvList[i].Key.SetKind(internalKeyKindDelete)
 			kvList[i].Key.SetSeqNum(seqNum)
-			seqNum++
-			require.NoError(t, wr.Set(*kvList[i].Key, kvList[i].Value))
+			kvList[i].Value = nil
+		} else {
+			kvList[i].Key.SetSeqNum(seqNum)
 		}
-		require.NoError(t, wr.FlushFinish())
+		require.NoError(t, wr.Set(*kvList[i].Key, kvList[i].Value))
+	}
+	require.NoError(t, wr.FlushFinish())
+	require.NoError(t, p.flush(nil))
+	require.Equal(t, pageFlushStateFinish, p.getFlushState())
+	p.setFlushState(pageFlushStateNone)
 
-		require.NoError(t, p.flush(nil, "333"))
-
-		for i := 0; i < 100; i++ {
-			key := kvList[i].Key.UserKey
-			v, vexist, vcloser, kind := p.get(key, hash.Crc32(key))
-			require.Equal(t, kvList[i].Value, v)
+	for i := 0; i < count; i++ {
+		key := kvList[i].Key.UserKey
+		v, vexist, vcloser, kind := p.get(key, hash.Fnv32(key))
+		if i%3 == 0 {
+			require.Equal(t, false, vexist)
+		} else {
+			if !bytes.Equal(kvList[i].Value, v) {
+				t.Fatalf("value not eq i:%d key:%s", i, string(key))
+			}
 			require.Equal(t, true, vexist)
 			require.Equal(t, internalKeyKindSet, kind)
 			vcloser()
 		}
+	}
 
-		testCloseBitpage(t, bp)
-	})
+	testCloseBitpage(t, bp)
 }
 
-func TestBitpageCompact_PrefixDeleteKey(t *testing.T) {
-	testcase(func(index int, params []bool) {
-		dir := testDir
-		defer os.RemoveAll(dir)
-		os.RemoveAll(dir)
+func TestBitpageSplit(t *testing.T) {
+	dir := testDir
+	defer os.RemoveAll(dir)
+	os.RemoveAll(dir)
 
-		var endIndex int
-		num := 5
-		stepCount := 30
-		seqNum := uint64(1)
-		count := (num + 2) * stepCount
-		kvList := sortedkv.MakeSortedSamePrefixDeleteKVList(0, count, seqNum, 10, testSlotId)
-		seqNum += uint64(count)
+	bp, err := testOpenBitpage()
+	require.NoError(t, err)
+	pn, err1 := bp.NewPage()
+	require.NoError(t, err1)
 
-		writeData := func(bp *Bitpage, pn PageNum) {
-			wr := bp.GetPageWriter(pn, nil)
-			startIndex := endIndex
-			endIndex = startIndex + stepCount
-			for i := startIndex; i < endIndex; i++ {
-				if i%3 == 0 && kvList[i].Key.Kind() != internalKeyKindPrefixDelete {
-					kvList[i].Key.SetKind(internalKeyKindDelete)
-					kvList[i].Value = []byte{}
-				}
-				require.NoError(t, wr.Set(*kvList[i].Key, kvList[i].Value))
-			}
-			require.NoError(t, wr.FlushFinish())
+	seqNum := uint64(1)
+	kn := 1000
+	kkn := 50
+	mn := 3
+	vs := 100
+	kvList := sortedkv.MakeSortedAllKVList(kn, kkn, mn, vs, seqNum)
+	count := len(kvList)
+	seqNum += uint64(count)
+	wr := bp.GetPageWriter(pn, nil)
+
+	for i := 0; i < count; i++ {
+		require.NoError(t, wr.Set(*kvList[i].Key, kvList[i].Value))
+	}
+	require.NoError(t, wr.FlushFinish())
+
+	p := bp.GetPage(pn)
+	require.NoError(t, p.flush(nil))
+
+	bp.opts.BitpageSplitSize = 1 << 18
+	sps, err2 := bp.PageSplitStart(pn, "test")
+	require.NoError(t, err2)
+	bp.PageSplitEnd(pn, sps, nil)
+
+	spsPn := 2
+	for i := range sps {
+		require.Equal(t, PageNum(spsPn), sps[i].Pn)
+		spsPn++
+		np := bp.GetPage(sps[i].Pn)
+		require.NotNil(t, np)
+		require.Equal(t, sps[i].Sentinel, np.arrtable.getMaxKey())
+	}
+	require.Equal(t, 3, len(sps))
+
+	pfiles := p.getFilesPath()
+	require.NoError(t, bp.FreePage(pn, true))
+	time.Sleep(1 * time.Second)
+	bp.opts.DeleteFilePacer.Flush()
+	for i := range pfiles {
+		if os2.IsExist(pfiles[i]) {
+			t.Fatalf("%s is not delete", pfiles[i])
 		}
+	}
 
-		readData := func(pg *page) {
-			for i := 0; i < endIndex; i++ {
-				key := kvList[i].Key.UserKey
-				v, vexist, vcloser, kind := pg.get(key, hash.Crc32(key))
-				pd := pg.bp.opts.KeyPrefixDeleteFunc(kvList[i].Key.UserKey)
-				if sortedkv.IsPrefixDeleteKey(pd) || i%3 == 0 {
-					if vexist {
-						t.Log(pd, i, kvList[i].Key.String())
-					}
-					require.Equal(t, false, vexist)
-				} else {
-					require.Equal(t, kvList[i].Value, v)
-					require.Equal(t, internalKeyKindSet, kind)
-					vcloser()
-				}
-			}
-		}
-
-		bp, err := testOpenBitpage(true)
-		require.NoError(t, err)
-		pn, err1 := bp.NewPage()
-		require.NoError(t, err1)
-		writeData(bp, pn)
-		p := bp.GetPage(pn)
-		require.NoError(t, p.flush(nil, ""))
-		readData(p)
-		testCloseBitpage(t, bp)
-
-		for i := 0; i < num; i++ {
-			bp2, err2 := testOpenBitpage(true)
-			require.NoError(t, err2)
-			writeData(bp2, pn)
-			p2 := bp2.GetPage(pn)
-			require.NoError(t, p2.flush(nil, ""))
-			readData(p2)
-			testCloseBitpage(t, bp2)
-		}
-	})
+	testCloseBitpage(t, bp)
 }
 
-func TestBitpageCompact_PrefixDeleteKey2(t *testing.T) {
-	testcase(func(index int, params []bool) {
-		dir := testDir
-		defer os.RemoveAll(dir)
-		os.RemoveAll(dir)
+func TestBitpageFlushArrayTableEmpty(t *testing.T) {
+	dir := testDir
+	defer os.RemoveAll(dir)
+	os.RemoveAll(dir)
 
-		var endIndex int
-		var pdVers []uint64
-		stepCount := 100
-		seqNum := uint64(1)
-		count := 2 * stepCount
-		kvList := sortedkv.MakeSlotSortedKVList2(0, count, seqNum, 10, testSlotId)
-		seqNum += uint64(count)
+	bp, err := testOpenBitpage()
+	require.NoError(t, err)
+	pn, err1 := bp.NewPage()
+	require.NoError(t, err1)
 
-		isPrefixDelete := func(v uint64) bool {
-			if len(pdVers) == 0 {
-				return false
+	seqNum := uint64(1)
+	kn := 100
+	kkn := 10
+	mn := 5
+	vs := 100
+	kvList := sortedkv.MakeSortedAllKVList(kn, kkn, mn, vs, seqNum)
+	count := len(kvList)
+	seqNum += uint64(count)
+	wr := bp.GetPageWriter(pn, nil)
+
+	for i := 0; i < count; i++ {
+		require.NoError(t, wr.Set(*kvList[i].Key, kvList[i].Value))
+	}
+	require.NoError(t, wr.FlushFinish())
+
+	p := bp.GetPage(pn)
+
+	require.NoError(t, p.flush(nil))
+
+	wr = bp.GetPageWriter(pn, nil)
+	for i := 0; i < count; i++ {
+		kvList[i].Key.SetKind(internalKeyKindDelete)
+		kvList[i].Key.SetSeqNum(seqNum)
+		seqNum++
+		require.NoError(t, wr.Set(*kvList[i].Key, kvList[i].Value))
+	}
+	require.NoError(t, wr.FlushFinish())
+
+	require.Equal(t, base.ErrPageFlushEmpty, p.flush(nil))
+
+	testCloseBitpage(t, bp)
+}
+
+func TestBitpageFlushPrefixDeleteKey(t *testing.T) {
+	dir := testDir
+	defer os.RemoveAll(dir)
+	os.RemoveAll(dir)
+
+	var endIndex int
+	num := 5
+	stepCount := 30
+	seqNum := uint64(1)
+	count := (num + 2) * stepCount
+	kvList := sortedkv.MakeSortedSamePrefixDeleteKVList(0, count, seqNum, 10)
+	seqNum += uint64(count)
+
+	writeData := func(bp *Bitpage, pn PageNum) {
+		wr := bp.GetPageWriter(pn, nil)
+		startIndex := endIndex
+		endIndex = startIndex + stepCount
+		for i := startIndex; i < endIndex; i++ {
+			if i%3 == 0 && kvList[i].Key.Kind() != internalKeyKindPrefixDelete {
+				kvList[i].Key.SetKind(internalKeyKindDelete)
+				kvList[i].Value = nil
 			}
-			for i := range pdVers {
-				if pdVers[i] == v {
-					return true
+			require.NoError(t, wr.Set(*kvList[i].Key, kvList[i].Value))
+		}
+		require.NoError(t, wr.FlushFinish())
+	}
+
+	readData := func(pg *page) {
+		for i := 0; i < endIndex; i++ {
+			key := kvList[i].Key.UserKey
+			v, vexist, vcloser, kind := pg.get(key, hash.Fnv32(key))
+			pd := kkv.DecodeKeyVersion(kvList[i].Key.UserKey)
+			if sortedkv.IsPrefixDeleteKey(pd) || i%3 == 0 {
+				if vexist {
+					t.Log(pd, i, kvList[i].Key.String())
 				}
+				require.Equal(t, false, vexist)
+			} else {
+				require.Equal(t, kvList[i].Value, v)
+				require.Equal(t, internalKeyKindSet, kind)
+				vcloser()
 			}
+		}
+	}
+
+	bp, err := testOpenBitpage()
+	require.NoError(t, err)
+	pn, err1 := bp.NewPage()
+	require.NoError(t, err1)
+	writeData(bp, pn)
+	p := bp.GetPage(pn)
+	require.NoError(t, p.flush(nil))
+	readData(p)
+	testCloseBitpage(t, bp)
+
+	for i := 0; i < num; i++ {
+		bp2, err2 := testOpenBitpage()
+		require.NoError(t, err2)
+		writeData(bp2, pn)
+		p2 := bp2.GetPage(pn)
+		require.NoError(t, p2.flush(nil))
+		readData(p2)
+		testCloseBitpage(t, bp2)
+	}
+}
+
+func TestBitpageFlushPrefixDeleteKey2(t *testing.T) {
+	dir := testDir
+	defer os.RemoveAll(dir)
+	os.RemoveAll(dir)
+
+	var pdVers []uint64
+	seqNum := uint64(1)
+	count := 200
+	kvList := sortedkv.MakeSlotSortedKVList2(0, count, seqNum, 10)
+	seqNum += uint64(count)
+
+	isPrefixDelete := func(v uint64) bool {
+		if len(pdVers) == 0 {
 			return false
 		}
-
-		writeData := func(bp *Bitpage, pn PageNum) {
-			wr := bp.GetPageWriter(pn, nil)
-			startIndex := endIndex
-			endIndex = startIndex + stepCount
-			for i := startIndex; i < endIndex; i++ {
-				require.NoError(t, wr.Set(*kvList[i].Key, kvList[i].Value))
+		for i := range pdVers {
+			if pdVers[i] == v {
+				return true
 			}
-			require.NoError(t, wr.FlushFinish())
 		}
+		return false
+	}
 
-		writePrefixDeleteKey := func(bp *Bitpage, pn PageNum, versions []uint64) {
-			if len(versions) == 0 {
-				return
-			}
-			wr := bp.GetPageWriter(pn, nil)
-			for _, version := range versions {
-				key := sortedkv.MakeKey2(nil, testSlotId, version)
-				seqNum++
-				ikey := base.MakeInternalKey(key, seqNum, base.InternalKeyKindPrefixDelete)
-				require.NoError(t, wr.Set(ikey, []byte{}))
-			}
-			require.NoError(t, wr.FlushFinish())
-		}
-
-		readData := func(pg *page) {
-			for i := 0; i < endIndex; i++ {
-				key := kvList[i].Key.UserKey
-				v, vexist, vcloser, kind := pg.get(key, hash.Crc32(key))
-				pd := pg.bp.opts.KeyPrefixDeleteFunc(kvList[i].Key.UserKey)
-				if isPrefixDelete(pd) {
-					if vexist {
-						t.Log(pd, i, kvList[i].Key.String())
-					}
-					require.Equal(t, false, vexist)
-				} else {
-					require.Equal(t, kvList[i].Value, v)
-					require.Equal(t, internalKeyKindSet, kind)
-					vcloser()
+	readData := func(pg *page) {
+		for i := 0; i < count; i++ {
+			key := kvList[i].Key.UserKey
+			v, vexist, vcloser, kind := pg.get(key, hash.Fnv32(key))
+			pd := kkv.DecodeKeyVersion(kvList[i].Key.UserKey)
+			if isPrefixDelete(pd) {
+				if vexist {
+					t.Log(pd, i, kvList[i].Key.String())
 				}
+				require.Equal(t, false, vexist)
+			} else {
+				require.Equal(t, kvList[i].Value, v)
+				require.Equal(t, internalKeyKindSet, kind)
+				vcloser()
 			}
 		}
+	}
 
-		bp, err := testOpenBitpage(true)
-		require.NoError(t, err)
-		pn, err1 := bp.NewPage()
-		require.NoError(t, err1)
-		writeData(bp, pn)
-		p := bp.GetPage(pn)
-		require.NoError(t, p.flush(nil, ""))
-		readData(p)
+	bp, err := testOpenBitpage()
+	require.NoError(t, err)
+	pn, err1 := bp.NewPage()
+	require.NoError(t, err1)
 
-		pdVers = []uint64{101, 103, 105}
-		writePrefixDeleteKey(bp, pn, pdVers)
-		require.NoError(t, p.flush(nil, ""))
-		readData(p)
+	wr := bp.GetPageWriter(pn, nil)
+	for i := 0; i < count; i++ {
+		require.NoError(t, wr.Set(*kvList[i].Key, kvList[i].Value))
+	}
+	require.NoError(t, wr.FlushFinish())
 
-		testCloseBitpage(t, bp)
-	})
+	p := bp.GetPage(pn)
+	require.NoError(t, p.flush(nil))
+	readData(p)
+
+	pdVers = []uint64{101, 103, 105}
+	wr = bp.GetPageWriter(pn, nil)
+	for _, version := range pdVers {
+		seqNum++
+		ikey := sortedkv.MakePrefixDeleteKey(version, seqNum)
+		require.NoError(t, wr.Set(ikey, nil))
+	}
+	require.NoError(t, wr.FlushFinish())
+	require.NoError(t, p.flush(nil))
+	readData(p)
+
+	testCloseBitpage(t, bp)
 }

@@ -22,8 +22,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/zuoyebang/bitalosdb/bitree/bdb"
-	"github.com/zuoyebang/bitalosdb/internal/options"
+	"github.com/zuoyebang/bitalosdb/v2/bitree/bdb"
+	"github.com/zuoyebang/bitalosdb/v2/internal/options"
 )
 
 func TestTx_Check_ReadOnly(t *testing.T) {

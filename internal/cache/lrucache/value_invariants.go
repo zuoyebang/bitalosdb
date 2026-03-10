@@ -21,8 +21,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/zuoyebang/bitalosdb/internal/invariants"
-	"github.com/zuoyebang/bitalosdb/internal/manual"
+	"github.com/zuoyebang/bitalosdb/v2/internal/invariants"
+	"github.com/zuoyebang/bitalosdb/v2/internal/manual"
 )
 
 func newValue(n int) *Value {

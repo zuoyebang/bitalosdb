@@ -22,12 +22,12 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	base2 "github.com/zuoyebang/bitalosdb/internal/cache/lfucache/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/fastrand"
+	base2 "github.com/zuoyebang/bitalosdb/v2/internal/cache/lfucache/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/fastrand"
 )
 
 const (
-	maxHeight   = 20
+	maxHeight   = 19
 	maxNodeSize = int(unsafe.Sizeof(node{}))
 	linksSize   = int(unsafe.Sizeof(links{}))
 	pValue      = 1 / math.E

@@ -14,7 +14,9 @@
 
 package arenaskl
 
-import "github.com/zuoyebang/bitalosdb/internal/base"
+import (
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+)
 
 type flushIterator struct {
 	Iterator
@@ -31,23 +33,26 @@ func (it *flushIterator) SeekGE(key []byte) (*base.InternalKey, []byte) {
 	panic("bitalosdb: SeekGE unimplemented")
 }
 
-func (it *flushIterator) SeekPrefixGE(
-	prefix, key []byte, trySeekUsingNext bool,
-) (*base.InternalKey, []byte) {
-	panic("bitalosdb: SeekPrefixGE unimplemented")
-}
-
 func (it *flushIterator) SeekLT(key []byte) (*base.InternalKey, []byte) {
 	panic("bitalosdb: SeekLT unimplemented")
 }
 
+func (it *flushIterator) Last() (*base.InternalKey, []byte) {
+	panic("bitalosdb: Last unimplemented")
+}
+
 func (it *flushIterator) First() (*base.InternalKey, []byte) {
-	key, val := it.Iterator.First()
-	if key == nil {
+	it.nd = it.list.getNext(it.list.head, 0)
+	if it.nd == it.list.tail {
+		return nil, nil
+	}
+	it.decodeKey()
+	if it.upper != nil && it.list.cmp(it.upper, it.key.UserKey) <= 0 {
+		it.nd = it.list.tail
 		return nil, nil
 	}
 	*it.bytesIterated += uint64(it.nd.allocSize)
-	return key, val
+	return &it.key, it.value()
 }
 
 func (it *flushIterator) Next() (*base.InternalKey, []byte) {

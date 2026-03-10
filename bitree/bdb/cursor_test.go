@@ -25,7 +25,7 @@ import (
 	"testing"
 	"testing/quick"
 
-	"github.com/zuoyebang/bitalosdb/bitree/bdb"
+	"github.com/zuoyebang/bitalosdb/v2/bitree/bdb"
 )
 
 func TestCursor_Bucket(t *testing.T) {

@@ -20,10 +20,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/cache"
-	"github.com/zuoyebang/bitalosdb/internal/hash"
-	"github.com/zuoyebang/bitalosdb/internal/options"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/cache"
+	"github.com/zuoyebang/bitalosdb/v2/internal/hash"
+	"github.com/zuoyebang/bitalosdb/v2/internal/options"
 )
 
 const (
@@ -99,7 +99,7 @@ func (lfc *LfuCache) Get(key []byte, khash uint32) ([]byte, func(), bool) {
 }
 
 func (lfc *LfuCache) GetKeyHash(key []byte) uint32 {
-	return hash.Crc32(key)
+	return hash.Fnv32(key)
 }
 
 func (lfc *LfuCache) Delete(key []byte, khash uint32) error {

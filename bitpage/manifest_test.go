@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestManifest_Open(t *testing.T) {
+func TestManifestOpen(t *testing.T) {
 	testInitDir()
 	defer os.RemoveAll(testDir)
 
@@ -52,7 +52,7 @@ func TestManifest_Open(t *testing.T) {
 		require.Equal(t, FileNum(1), pmItem.nextStFileNum)
 		require.Equal(t, FileNum(0), pmItem.curAtFileNum)
 		require.Equal(t, FileNum(1), pmItem.minUnflushedStFileNum)
-		require.Equal(t, uint8(0), pmItem.splitState)
+		require.Equal(t, uint8(0), pmItem.state)
 		for j := 0; j < num; j++ {
 			fn := bpage.meta.getNextStFileNum(pageNum)
 			require.Equal(t, pmItem.nextStFileNum, fn+FileNum(1))
@@ -62,7 +62,7 @@ func TestManifest_Open(t *testing.T) {
 			require.Equal(t, pmItem.curAtFileNum+FileNum(1), fn)
 			bpage.meta.setNextArrayTableFileNum(pageNum)
 		}
-		bpage.meta.setSplitState(pageNum, 1)
+		bpage.meta.setPageState(pageNum, 1)
 	}
 
 	for i := 1; i <= 10; i++ {
@@ -85,7 +85,7 @@ func TestManifest_Open(t *testing.T) {
 		require.Equal(t, pageNum, pmItem.pageNum)
 		require.Equal(t, FileNum(num+1), pmItem.nextStFileNum)
 		require.Equal(t, FileNum(num), pmItem.curAtFileNum)
-		require.Equal(t, uint8(1), pmItem.splitState)
+		require.Equal(t, uint8(1), pmItem.state)
 		for j := 0; j < num; j++ {
 			fn := bpage.meta.getNextStFileNum(pageNum)
 			require.Equal(t, pmItem.nextStFileNum, fn+FileNum(1))
@@ -109,8 +109,8 @@ func TestManifest_Open(t *testing.T) {
 		require.Equal(t, FileNum(1), pmItem.nextStFileNum)
 		require.Equal(t, FileNum(0), pmItem.curAtFileNum)
 		require.Equal(t, FileNum(1), pmItem.minUnflushedStFileNum)
-		require.Equal(t, uint8(0), pmItem.splitState)
-		bpage.meta.setSplitState(pageNum, 2)
+		require.Equal(t, uint8(0), pmItem.state)
+		bpage.meta.setPageState(pageNum, 2)
 		for j := 0; j < num; j++ {
 			fn := bpage.meta.getNextStFileNum(pageNum)
 			require.Equal(t, pmItem.nextStFileNum, fn+FileNum(1))
@@ -120,11 +120,11 @@ func TestManifest_Open(t *testing.T) {
 			require.Equal(t, pmItem.curAtFileNum+FileNum(1), fn)
 			bpage.meta.setNextArrayTableFileNum(pageNum)
 		}
-		require.Equal(t, uint8(2), bpage.meta.getSplitState(pageNum))
+		require.Equal(t, uint8(2), bpage.meta.getPageState(pageNum))
 	}
 }
 
-func TestManifest_Write(t *testing.T) {
+func TestManifestWrite(t *testing.T) {
 	testInitDir()
 	defer os.RemoveAll(testDir)
 
@@ -154,8 +154,8 @@ func TestManifest_Write(t *testing.T) {
 				require.Equal(t, pmItem.curAtFileNum+FileNum(1), fn)
 				bpage.meta.setNextArrayTableFileNum(pageNum)
 			}
-			require.Equal(t, uint8(0), pmItem.splitState)
-			bpage.meta.setSplitState(pageNum, 2)
+			require.Equal(t, uint8(0), pmItem.state)
+			bpage.meta.setPageState(pageNum, 2)
 		}
 		require.Equal(t, PageNum(index*100), bpage.meta.getCurrentPageNum())
 		require.Equal(t, index*100, len(bpage.meta.mu.pagemetaMap))
@@ -173,12 +173,12 @@ func TestManifest_Write(t *testing.T) {
 		require.Equal(t, pn, pmItem.pageNum)
 		require.Equal(t, FileNum(10), pmItem.curAtFileNum)
 		require.Equal(t, FileNum(11), pmItem.nextStFileNum)
-		require.Equal(t, uint8(2), pmItem.splitState)
+		require.Equal(t, uint8(2), pmItem.state)
 	}
 	require.NoError(t, bpage.meta.close())
 }
 
-func TestManifest_PagemetaFull(t *testing.T) {
+func TestManifestPagemetaFull(t *testing.T) {
 	testInitDir()
 	defer os.RemoveAll(testDir)
 

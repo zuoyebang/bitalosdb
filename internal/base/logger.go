@@ -17,7 +17,6 @@ package base
 import (
 	"fmt"
 	"log"
-	"os"
 	"time"
 )
 
@@ -115,8 +114,7 @@ func (l defaultLogger) Errorf(format string, args ...interface{}) {
 }
 
 func (l defaultLogger) Fatalf(format string, args ...interface{}) {
-	_ = log.Output(2, fmt.Sprintf(logTagFmt+format, l.tag, fmt.Sprint(args...)))
-	os.Exit(1)
+	_ = log.Output(2, fmt.Sprintf(logTagFmt, l.tag, fmt.Sprintf(format, args...)))
 }
 
 func (l defaultLogger) Cost(args ...interface{}) func() {

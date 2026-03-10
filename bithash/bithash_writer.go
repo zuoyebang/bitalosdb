@@ -14,7 +14,7 @@
 
 package bithash
 
-import "github.com/zuoyebang/bitalosdb/internal/base"
+import "github.com/zuoyebang/bitalosdb/v2/internal/base"
 
 type BithashWriter struct {
 	b       *Bithash

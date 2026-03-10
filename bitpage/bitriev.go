@@ -340,7 +340,7 @@ func (bt *Bitriev) ToBytes() []byte {
 		buf = append(buf, fmt.Sprintf("key=%c; prune=%s; value=%d; ", node.key, node.prune, node.voffset)...)
 		if len(node.children) > 0 {
 			buf = append(buf, fmt.Sprintf("children[%d]=[", len(node.children))...)
-			for k, _ := range node.children {
+			for k := range node.children {
 				buf = append(buf, fmt.Sprintf("k=%c, ", k)...)
 			}
 			buf = append(buf, "]\n"...)

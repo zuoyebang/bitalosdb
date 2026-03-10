@@ -15,33 +15,31 @@
 package bitpage
 
 import (
-	"bytes"
-	"errors"
+	"github.com/zuoyebang/bitalosdb/v2/internal/kkv"
+)
+
+type stripeChangeType int
+
+const (
+	newStripe stripeChangeType = iota
+	sameStripeSkippable
+	sameStripeNonSkippable
 )
 
 type compactionIter struct {
 	bp        *Bitpage
-	iter      internalIterator
+	iter      InternalKKVIterator
 	err       error
-	key       internalKey
-	value     []byte
-	keyBuf    []byte
+	key       InternalKKVKey
 	valid     bool
-	iterKey   *internalKey
+	iterKey   *InternalKKVKey
 	iterValue []byte
 	skip      bool
 	pos       iterPos
+	isPreCalc bool
 }
 
-func newCompactionIter(bp *Bitpage, iter internalIterator) *compactionIter {
-	i := &compactionIter{
-		bp:   bp,
-		iter: iter,
-	}
-	return i
-}
-
-func (i *compactionIter) First() (*internalKey, []byte) {
+func (i *compactionIter) First() (*InternalKKVKey, []byte) {
 	if i.err != nil {
 		return nil, nil
 	}
@@ -50,7 +48,7 @@ func (i *compactionIter) First() (*internalKey, []byte) {
 	return i.Next()
 }
 
-func (i *compactionIter) Next() (*internalKey, []byte) {
+func (i *compactionIter) Next() (*InternalKKVKey, []byte) {
 	if i.err != nil {
 		return nil, nil
 	}
@@ -65,23 +63,13 @@ func (i *compactionIter) Next() (*internalKey, []byte) {
 
 	i.pos = iterPosCurForward
 	i.valid = false
-	for i.iterKey != nil {
-		switch i.iterKey.Kind() {
-		case internalKeyKindSet, internalKeyKindDelete, internalKeyKindPrefixDelete:
-			i.saveKey()
-			i.value = i.iterValue
-			i.valid = true
-			i.skip = true
-			return &i.key, i.value
-
-		default:
-			i.err = errors.New("invalid internal key kind")
-			i.valid = false
-			return nil, nil
-		}
+	if i.iterKey == nil {
+		return nil, nil
 	}
-
-	return nil, nil
+	i.key.Copy(i.iterKey)
+	i.valid = true
+	i.skip = true
+	return &i.key, i.iterValue
 }
 
 func (i *compactionIter) skipInStripe() {
@@ -99,60 +87,25 @@ func (i *compactionIter) skipInStripe() {
 	}
 }
 
-func (i *compactionIter) iterNext() bool {
-	i.iterKey, i.iterValue = i.iter.Next()
-	return i.iterKey != nil
-}
-
-type stripeChangeType int
-
-const (
-	newStripe stripeChangeType = iota
-	sameStripeSkippable
-	sameStripeNonSkippable
-)
-
 func (i *compactionIter) nextInStripe() stripeChangeType {
-	if !i.iterNext() {
+	i.iterKey, i.iterValue = i.iter.Next()
+	if i.iterKey == nil || !kkv.UserKeyEqual(&i.key, i.iterKey) {
 		return newStripe
 	}
 
-	key := i.iterKey
-	if !bytes.Equal(i.key.UserKey, key.UserKey) {
-		return newStripe
-	}
-
-	if key.Kind() == internalKeyKindInvalid {
+	if i.iterKey.Kind() == internalKeyKindInvalid {
 		return sameStripeNonSkippable
 	}
 
-	if i.bp != nil && key.SeqNum() == 1 {
+	if !i.isPreCalc && i.bp != nil && i.iterKey.SeqNum() == 1 {
 		i.bp.deleteBithashKey(i.iterValue)
 	}
 
 	return sameStripeSkippable
 }
 
-func (i *compactionIter) saveKey() {
-	i.keyBuf = append(i.keyBuf[:0], i.iterKey.UserKey...)
-	i.key.UserKey = i.keyBuf
-	i.key.Trailer = i.iterKey.Trailer
-}
-
-func (i *compactionIter) Key() internalKey {
-	return i.key
-}
-
-func (i *compactionIter) Value() []byte {
-	return i.value
-}
-
-func (i *compactionIter) Valid() bool {
-	return i.valid
-}
-
-func (i *compactionIter) Error() error {
-	return i.err
+func (i *compactionIter) Key() []byte {
+	return i.key.MakeUserKey()
 }
 
 func (i *compactionIter) Close() error {

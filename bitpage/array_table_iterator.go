@@ -15,14 +15,12 @@
 package bitpage
 
 import (
-	"bytes"
 	"sync"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/bytepools"
+	"github.com/zuoyebang/bitalosdb/v2/internal/kkv"
 )
 
-var _ base.InternalIterator = (*arrayTableIterator)(nil)
+var _ InternalKKVIterator = (*arrayTableIterator)(nil)
 
 type sharedInfo struct {
 	idx int
@@ -30,11 +28,11 @@ type sharedInfo struct {
 }
 
 type arrayTableIterator struct {
-	at           *arrayTable
-	intIndexPos  int
-	blockIter    *pageBlockIterator
-	blockCloser  func()
-	iterKey      internalKey
+	at          *arrayTable
+	intIndexPos int
+	//blockIter    *pageBlockIterator
+	//blockCloser  func()
+	iterKey      InternalKKVKey
 	iterValue    []byte
 	keyBuf       []byte
 	sharedCache  *sharedInfo
@@ -47,7 +45,7 @@ var atIterPool = sync.Pool{
 	},
 }
 
-func (ai *arrayTableIterator) findItem() (*internalKey, []byte) {
+func (ai *arrayTableIterator) findItem() (*InternalKKVKey, []byte) {
 	sharedKey1, sharedKey2, value := ai.at.getSharedKV(ai.intIndexPos, ai.sharedCache)
 	if sharedKey1 == nil {
 		return nil, nil
@@ -61,105 +59,105 @@ func (ai *arrayTableIterator) findItem() (*internalKey, []byte) {
 		key = append(ai.keyBuf, sharedKey2...)
 	}
 
-	ai.iterKey = base.MakeInternalSetKey(key)
+	ai.iterKey = kkv.MakeInternalSetKey(key)
 	ai.iterValue = value
 	return &ai.iterKey, ai.iterValue
 }
 
-func (ai *arrayTableIterator) firstInternal() (*internalKey, []byte) {
+func (ai *arrayTableIterator) firstInternal() (*InternalKKVKey, []byte) {
 	ai.intIndexPos = 0
 	if ai.at.isNonBlock() {
 		return ai.findItem()
 	}
 
-	if ai.setBlockIter() {
-		return ai.blockIter.First()
-	}
+	//if ai.setBlockIter() {
+	//	return ai.blockIter.First()
+	//}
 
 	return nil, nil
 }
 
-func (ai *arrayTableIterator) First() (*internalKey, []byte) {
+func (ai *arrayTableIterator) First() (*InternalKKVKey, []byte) {
 	return ai.firstInternal()
 }
 
-func (ai *arrayTableIterator) nextInternal() (*internalKey, []byte) {
+func (ai *arrayTableIterator) nextInternal() (*InternalKKVKey, []byte) {
 	if ai.at.isNonBlock() {
 		ai.intIndexPos++
 		return ai.findItem()
 	}
 
-	if ai.blockIter == nil {
-		return nil, nil
-	}
-
-	ikey, value := ai.blockIter.Next()
-	if ikey != nil {
-		return ikey, value
-	}
-
-	ai.intIndexPos++
-	if ai.setBlockIter() {
-		return ai.blockIter.First()
-	}
+	//if ai.blockIter == nil {
+	//	return nil, nil
+	//}
+	//
+	//ikey, value := ai.blockIter.Next()
+	//if ikey != nil {
+	//	return ikey, value
+	//}
+	//
+	//ai.intIndexPos++
+	//if ai.setBlockIter() {
+	//	return ai.blockIter.First()
+	//}
 
 	return nil, nil
 }
 
-func (ai *arrayTableIterator) Next() (*internalKey, []byte) {
+func (ai *arrayTableIterator) Next() (*InternalKKVKey, []byte) {
 	return ai.nextInternal()
 }
 
-func (ai *arrayTableIterator) Prev() (*internalKey, []byte) {
+func (ai *arrayTableIterator) Prev() (*InternalKKVKey, []byte) {
 	if ai.at.isNonBlock() {
 		ai.intIndexPos--
 		return ai.findItem()
 	}
 
-	if ai.blockIter == nil {
-		return nil, nil
-	}
-
-	ikey, value := ai.blockIter.Prev()
-	if ikey != nil {
-		return ikey, value
-	}
-
-	ai.intIndexPos--
-	if ai.setBlockIter() {
-		return ai.blockIter.Last()
-	}
+	//if ai.blockIter == nil {
+	//	return nil, nil
+	//}
+	//
+	//ikey, value := ai.blockIter.Prev()
+	//if ikey != nil {
+	//	return ikey, value
+	//}
+	//
+	//ai.intIndexPos--
+	//if ai.setBlockIter() {
+	//	return ai.blockIter.Last()
+	//}
 
 	return nil, nil
 }
 
-func (ai *arrayTableIterator) Last() (*internalKey, []byte) {
+func (ai *arrayTableIterator) Last() (*InternalKKVKey, []byte) {
 	ai.intIndexPos = ai.at.num - 1
 	if ai.at.isNonBlock() {
 		return ai.findItem()
 	}
 
-	if ai.setBlockIter() {
-		return ai.blockIter.Last()
-	}
+	//if ai.setBlockIter() {
+	//	return ai.blockIter.Last()
+	//}
 
 	return nil, nil
 }
 
-func (ai *arrayTableIterator) SeekGE(key []byte) (*internalKey, []byte) {
+func (ai *arrayTableIterator) SeekGE(key []byte) (*InternalKKVKey, []byte) {
 	ai.intIndexPos = ai.at.findKeyByIntIndex(key)
 	if ai.at.isNonBlock() {
 		return ai.findItem()
 	}
 
-	if ai.setBlockIter() {
-		return ai.blockIter.SeekGE(key)
-	}
+	//if ai.setBlockIter() {
+	//	return ai.blockIter.SeekGE(key)
+	//}
 
 	return nil, nil
 }
 
-func (ai *arrayTableIterator) SeekLT(key []byte) (*internalKey, []byte) {
+func (ai *arrayTableIterator) SeekLT(key []byte) (*InternalKKVKey, []byte) {
 	ai.intIndexPos = ai.at.findKeyByIntIndex(key)
 	if ai.at.isNonBlock() {
 		poskey, _ := ai.findItem()
@@ -168,32 +166,26 @@ func (ai *arrayTableIterator) SeekLT(key []byte) (*internalKey, []byte) {
 		}
 
 		lastKey, lastValue := ai.Last()
-		if lastKey != nil && bytes.Compare(lastKey.UserKey, key) < 0 {
+		if kkv.IsUserKeyLTLowerBound(lastKey, key) {
 			return lastKey, lastValue
 		}
 		return nil, nil
 	}
 
-	if ai.intIndexPos >= ai.at.num {
-		ai.intIndexPos = ai.at.num - 1
-	}
-
-	for i := 0; ai.setBlockIter() && i < 2; i++ {
-		ikey, value := ai.blockIter.SeekLT(key)
-		if ikey != nil {
-			return ikey, value
-		}
-
-		ai.intIndexPos--
-	}
+	//if ai.intIndexPos >= ai.at.num {
+	//	ai.intIndexPos = ai.at.num - 1
+	//}
+	//
+	//for i := 0; ai.setBlockIter() && i < 2; i++ {
+	//	ikey, value := ai.blockIter.SeekLT(key)
+	//	if ikey != nil {
+	//		return ikey, value
+	//	}
+	//
+	//	ai.intIndexPos--
+	//}
 
 	return nil, nil
-}
-
-func (ai *arrayTableIterator) SeekPrefixGE(
-	prefix, key []byte, trySeekUsingNext bool,
-) (ikey *internalKey, value []byte) {
-	return ai.SeekGE(key)
 }
 
 func (ai *arrayTableIterator) SetBounds(lower, upper []byte) {
@@ -203,56 +195,56 @@ func (ai *arrayTableIterator) Error() error {
 	return nil
 }
 
-func (ai *arrayTableIterator) setBlockIter() bool {
-	if !ai.at.checkPositon(ai.intIndexPos) {
-		ai.closeBlockIter()
-		return false
-	}
-
-	blockBuf, closer, blockExist := ai.at.blockCache.GetBlock(ai.at.cacheID, uint64(ai.intIndexPos))
-	if !blockExist {
-		_, blockBuf = ai.at.getKV(ai.intIndexPos)
-		if len(blockBuf) > 0 {
-			var compressedBuf []byte
-			compressedBuf, closer = bytepools.ReaderBytePools.GetMaxBytePool()
-			blockBuf, _ = compressDecode(compressedBuf, blockBuf)
-			if !ai.disableCache {
-				ai.at.blockCache.SetBlock(ai.at.cacheID, uint64(ai.intIndexPos), blockBuf)
-			}
-		} else {
-			ai.closeBlockIter()
-			return false
-		}
-	}
-
-	ai.closeBlockIter()
-
-	if closer != nil {
-		ai.blockCloser = closer
-	}
-
-	pb := pageBlock{}
-	openPageBlock(&pb, blockBuf)
-
-	ai.blockIter = pb.newIter(nil)
-
-	return true
-}
-
-func (ai *arrayTableIterator) closeBlockIter() {
-	if ai.blockIter != nil {
-		if ai.blockCloser != nil {
-			ai.blockCloser()
-		}
-
-		ai.blockIter.Close()
-	}
-	ai.blockIter = nil
-	ai.blockCloser = nil
-}
+//func (ai *arrayTableIterator) setBlockIter() bool {
+//	if !ai.at.checkPositon(ai.intIndexPos) {
+//		ai.closeBlockIter()
+//		return false
+//	}
+//
+//	blockBuf, closer, blockExist := ai.at.blockCache.GetBlock(ai.at.cacheID, uint64(ai.intIndexPos))
+//	if !blockExist {
+//		_, blockBuf = ai.at.getKV(ai.intIndexPos)
+//		if len(blockBuf) > 0 {
+//			var compressedBuf []byte
+//			compressedBuf, closer = bytepools.ReaderBytePools.GetMaxBytePool()
+//			blockBuf, _ = compressDecode(compressedBuf, blockBuf)
+//			if !ai.disableCache {
+//				ai.at.blockCache.SetBlock(ai.at.cacheID, uint64(ai.intIndexPos), blockBuf)
+//			}
+//		} else {
+//			ai.closeBlockIter()
+//			return false
+//		}
+//	}
+//
+//	ai.closeBlockIter()
+//
+//	if closer != nil {
+//		ai.blockCloser = closer
+//	}
+//
+//	pb := pageBlock{}
+//	openPageBlock(&pb, blockBuf)
+//
+//	ai.blockIter = pb.newIter(nil)
+//
+//	return true
+//}
+//
+//func (ai *arrayTableIterator) closeBlockIter() {
+//	if ai.blockIter != nil {
+//		if ai.blockCloser != nil {
+//			ai.blockCloser()
+//		}
+//
+//		ai.blockIter.Close()
+//	}
+//	ai.blockIter = nil
+//	ai.blockCloser = nil
+//}
 
 func (ai *arrayTableIterator) Close() error {
-	ai.closeBlockIter()
+	//ai.closeBlockIter()
 	ai.at = nil
 	ai.intIndexPos = 0
 	ai.iterValue = nil

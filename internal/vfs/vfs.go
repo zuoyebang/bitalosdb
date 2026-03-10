@@ -305,3 +305,44 @@ func LinkOrCopy(fs FS, oldname, newname string) error {
 	}
 	return Copy(fs, oldname, newname)
 }
+
+func MkdirAllAndSyncParents(fs FS, destDir string) (File, error) {
+	var parentPaths []string
+	if err := fs.MkdirAll(destDir, 0755); err != nil {
+		return nil, err
+	}
+
+	foundExistingAncestor := false
+	for parentPath := fs.PathDir(destDir); parentPath != "."; parentPath = fs.PathDir(parentPath) {
+		parentPaths = append(parentPaths, parentPath)
+		_, err := fs.Stat(parentPath)
+		if err == nil {
+			foundExistingAncestor = true
+			break
+		}
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+	}
+
+	if !foundExistingAncestor {
+		parentPaths = append(parentPaths, "")
+	}
+
+	for _, parentPath := range parentPaths {
+		parentDir, err := fs.OpenDir(parentPath)
+		if err != nil {
+			return nil, err
+		}
+		err = parentDir.Sync()
+		if err != nil {
+			_ = parentDir.Close()
+			return nil, err
+		}
+		err = parentDir.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return fs.OpenDir(destDir)
+}

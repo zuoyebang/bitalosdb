@@ -19,9 +19,9 @@ import (
 	"os"
 	"sync/atomic"
 
-	arenaskl2 "github.com/zuoyebang/bitalosdb/internal/cache/lfucache/internal/arenaskl"
-	base2 "github.com/zuoyebang/bitalosdb/internal/cache/lfucache/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/manual"
+	arenaskl2 "github.com/zuoyebang/bitalosdb/v2/internal/cache/lfucache/internal/arenaskl"
+	base2 "github.com/zuoyebang/bitalosdb/v2/internal/cache/lfucache/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/manual"
 )
 
 func memTableEntrySize(keyBytes, valueBytes int) uint64 {

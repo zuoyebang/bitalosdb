@@ -20,7 +20,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zuoyebang/bitalosdb/internal/utils"
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
 )
 
 type FileNum uint32
@@ -36,15 +36,19 @@ func (fn PageNum) ToByte() []byte { return utils.Uint32ToBytes(uint32(fn)) }
 type FileType int
 
 const (
-	fileTypeManifest FileType = iota
+	fileTypeNone FileType = iota
+	fileTypeManifest
 	fileTypeSuperTable
 	fileTypeSuperTableIndex
+	fileTypeSklTable
+	fileTypeSklTableIndex
 	fileTypeArrayTable
+	fileTypeArrayTableIndex
+	fileTypeVectorArrayTable
+	fileTypeVectorArrayTableIndex
 )
 
-const (
-	manifestFileName = "BITPAGEMANIFEST"
-)
+const manifestFileName = "BITPAGEMANIFEST"
 
 func makeFilename(fileType FileType, pageNum PageNum, fileNum FileNum) string {
 	switch fileType {
@@ -54,8 +58,18 @@ func makeFilename(fileType FileType, pageNum PageNum, fileNum FileNum) string {
 		return fmt.Sprintf("%s_%s.xt", pageNum, fileNum)
 	case fileTypeSuperTableIndex:
 		return fmt.Sprintf("%s_%s.xti", pageNum, fileNum)
+	case fileTypeSklTable:
+		return fmt.Sprintf("%s_%s.st", pageNum, fileNum)
+	case fileTypeSklTableIndex:
+		return fmt.Sprintf("%s_%s.sti", pageNum, fileNum)
 	case fileTypeArrayTable:
 		return fmt.Sprintf("%s_%s.at", pageNum, fileNum)
+	case fileTypeArrayTableIndex:
+		return fmt.Sprintf("%s_%s.ati", pageNum, fileNum)
+	case fileTypeVectorArrayTable:
+		return fmt.Sprintf("%s_%s.vat", pageNum, fileNum)
+	case fileTypeVectorArrayTableIndex:
+		return fmt.Sprintf("%s_%s.vati", pageNum, fileNum)
 	default:
 		return ""
 	}
@@ -65,18 +79,17 @@ func makeFilepath(dirname string, fileType FileType, pageNum PageNum, fileNum Fi
 	switch fileType {
 	case fileTypeManifest:
 		return filepath.Join(dirname, manifestFileName)
-	case fileTypeSuperTable, fileTypeSuperTableIndex, fileTypeArrayTable:
-		return filepath.Join(dirname, makeFilename(fileType, pageNum, fileNum))
 	default:
-		return ""
+		return filepath.Join(dirname, makeFilename(fileType, pageNum, fileNum))
 	}
 }
 
 func parseFilename(filename string) (fileType FileType, pageNum PageNum, fileNum FileNum, ok bool) {
 	filename = filepath.Base(filename)
+	fileType = fileTypeNone
 	switch filename {
 	case manifestFileName:
-		return fileTypeManifest, 0, 0, true
+		fileType = fileTypeManifest
 	default:
 		i := strings.IndexByte(filename, '.')
 		if i < 0 {
@@ -108,8 +121,13 @@ func parseFilename(filename string) (fileType FileType, pageNum PageNum, fileNum
 			return fileTypeSuperTableIndex, pageNum, fileNum, true
 		case "at":
 			return fileTypeArrayTable, pageNum, fileNum, true
+		case "ati":
+			return fileTypeArrayTableIndex, pageNum, fileNum, true
+		case "vat":
+			return fileTypeVectorArrayTable, pageNum, fileNum, true
+		case "vati":
+			return fileTypeVectorArrayTableIndex, pageNum, fileNum, true
 		}
 	}
-
 	return 0, pageNum, fileNum, false
 }

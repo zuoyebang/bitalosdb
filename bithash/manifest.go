@@ -22,8 +22,8 @@ import (
 	"io/fs"
 	"sync"
 
-	"github.com/zuoyebang/bitalosdb/internal/list2"
-	"github.com/zuoyebang/bitalosdb/internal/mmap"
+	"github.com/zuoyebang/bitalosdb/v2/internal/list2"
+	"github.com/zuoyebang/bitalosdb/v2/internal/mmap"
 )
 
 const (
@@ -101,8 +101,8 @@ func (f *fileMetadata) String() string {
 
 func initManifest(b *Bithash) error {
 	b.meta = &BithashMetadata{b: b}
-	b.meta.mu.filesPos = make(map[FileNum]int, 1<<10)
-	b.meta.mu.filesMeta = make(map[FileNum]*fileMetadata, 1<<10)
+	b.meta.mu.filesPos = make(map[FileNum]int, 128)
+	b.meta.mu.filesMeta = make(map[FileNum]*fileMetadata, 128)
 	b.meta.mu.freesPos = list2.NewIntQueue(fileMetadataNum)
 
 	filename := MakeFilepath(b.fs, b.dirname, fileTypeManifest, 0)
@@ -116,12 +116,12 @@ func initManifest(b *Bithash) error {
 		return err
 	}
 
-	b.logger.Infof("[BITHASH %d] openManifest success version:%d len:%d uses:%d frees:%d",
-		b.index,
-		b.meta.version,
-		b.meta.mu.manifestMmap.Len(),
-		len(b.meta.mu.filesPos),
-		b.meta.mu.freesPos.Len())
+	//b.logger.Infof("[BITHASH %d] open manifest success version:%d len:%d use:%d free:%d",
+	//	b.index,
+	//	b.meta.version,
+	//	b.meta.mu.manifestMmap.Len(),
+	//	len(b.meta.mu.filesPos),
+	//	b.meta.mu.freesPos.Len())
 
 	return nil
 }
