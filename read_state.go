@@ -16,16 +16,16 @@ package bitalosdb
 
 import "sync/atomic"
 
-type readState struct {
+type vmReadState struct {
 	refcnt    atomic.Int32
-	memtables flushableList
+	memtables vmFlushableList
 }
 
-func (s *readState) ref() {
+func (s *vmReadState) ref() {
 	s.refcnt.Add(1)
 }
 
-func (s *readState) unref() {
+func (s *vmReadState) unref() {
 	if s.refcnt.Add(-1) != 0 {
 		return
 	}
@@ -34,30 +34,20 @@ func (s *readState) unref() {
 	}
 }
 
-func (s *Bitower) loadReadState() *readState {
-	s.readState.RLock()
-	state := s.readState.val
-	state.ref()
-	s.readState.RUnlock()
-	return state
+type memReadState struct {
+	refcnt    atomic.Int32
+	memtables memFlushableList
 }
 
-func (s *Bitower) updateReadState() {
-	rs := &readState{
-		memtables: s.mu.mem.queue,
+func (s *memReadState) ref() {
+	s.refcnt.Add(1)
+}
+
+func (s *memReadState) unref() {
+	if s.refcnt.Add(-1) != 0 {
+		return
 	}
-	rs.refcnt.Store(1)
-
-	for _, mem := range rs.memtables {
-		mem.readerRef()
-	}
-
-	s.readState.Lock()
-	old := s.readState.val
-	s.readState.val = rs
-	s.readState.Unlock()
-
-	if old != nil {
-		old.unref()
+	for _, mem := range s.memtables {
+		mem.readerUnref()
 	}
 }

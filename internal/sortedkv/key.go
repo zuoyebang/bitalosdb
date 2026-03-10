@@ -18,26 +18,17 @@ import (
 	"encoding/binary"
 	"strconv"
 
-	"github.com/zuoyebang/bitalosdb/internal/hash"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/kkv"
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
 )
 
-func MakeKey(key []byte) []byte {
-	slotId := uint16(hash.Crc32(key) % 1024)
-	keyLen := 2 + len(key)
+func MakeVersionKey(key []byte, version uint64) []byte {
+	keyLen := 8 + len(key)
 	newKey := make([]byte, keyLen)
-	binary.BigEndian.PutUint16(newKey[0:2], slotId)
-	copy(newKey[2:keyLen], key)
-	return newKey
-}
-
-func MakeKey2(key []byte, slotId uint16, version uint64) []byte {
-	keyLen := 10 + len(key)
-	newKey := make([]byte, keyLen)
-	binary.BigEndian.PutUint16(newKey[0:2], slotId)
-	binary.LittleEndian.PutUint64(newKey[2:10], version)
+	binary.LittleEndian.PutUint64(newKey[0:8], version)
 	if key != nil {
-		copy(newKey[10:keyLen], key)
+		copy(newKey[8:keyLen], key)
 	}
 	return newKey
 }
@@ -58,11 +49,11 @@ func MakeSortedKey(n int) []byte {
 	}
 }
 
-func MakeSortedSlotKey(n int, slotId uint16) []byte {
+func MakeSortedSubKey(n int) []byte {
 	if n < 0 {
-		return MakeSlotKey([]byte(sortedKeyPrefix), slotId)
+		return []byte(sortedSubKeyPrefix)
 	} else {
-		return MakeSlotKey([]byte(sortedKeyPrefix+strconv.Itoa(n)), slotId)
+		return []byte(sortedSubKeyPrefix + strconv.Itoa(n))
 	}
 }
 
@@ -72,4 +63,9 @@ func MakeSortedKeyForBitrie(n int) []byte {
 	} else {
 		return []byte(sortedKeyPrefix + string(utils.FuncRandBytes(1)) + "_bitalosdb_" + string(utils.FuncRandBytes(32)) + strconv.Itoa(n))
 	}
+}
+
+func MakePrefixDeleteKey(version, seqNum uint64) base.InternalKey {
+	key := MakeVersionKey([]byte{kkv.DataTypeHash}, version)
+	return base.MakeInternalKey(key, seqNum, base.InternalKeyKindPrefixDelete)
 }

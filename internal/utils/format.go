@@ -16,7 +16,10 @@ package utils
 
 import (
 	"fmt"
+	"strconv"
 	"time"
+
+	"github.com/zuoyebang/bitalosdb/v2/internal/unsafe2"
 )
 
 const (
@@ -50,4 +53,26 @@ func FmtUnixMillTime(ms int64) string {
 
 func FmtUnixTime(s int64) string {
 	return time.Unix(s, 0).Format(time.DateTime)
+}
+
+func FmtInt64ToSlice(v int64) []byte {
+	return strconv.AppendInt(nil, v, 10)
+}
+
+func FormatIntToSlice(v int) []byte {
+	return strconv.AppendInt(nil, int64(v), 10)
+}
+
+func FmtSliceToInt64(v []byte) (int64, error) {
+	if v == nil {
+		return 0, nil
+	}
+	return strconv.ParseInt(unsafe2.String(v), 10, 64)
+}
+
+func FmtUnixMilliToSec(time uint64) uint64 {
+	if time > 0 {
+		return (time + 1e3 - 1) / 1e3
+	}
+	return time
 }

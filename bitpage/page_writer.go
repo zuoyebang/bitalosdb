@@ -14,27 +14,27 @@
 
 package bitpage
 
+import (
+	"sync/atomic"
+)
+
 type PageWriter struct {
-	p        *page
-	Sentinel []byte
+	p          *page
+	sentinel   []byte
+	coWriteCnt atomic.Uint64
 }
 
-func (w *PageWriter) Set(key internalKey, value []byte) error {
-	return w.p.set(key, value)
-}
-
-func (w *PageWriter) SetMultiValue(key internalKey, values ...[]byte) error {
-	return w.p.setMulti(key, values...)
-}
-
-func (w *PageWriter) UpdateMetaTimestamp() {
-	w.p.bp.meta.updatePagemetaTimestamp(w.p.pn)
+func (w *PageWriter) Set(key internalKey, value ...[]byte) error {
+	w.p.stMutable.kindStatis(key.Kind())
+	return w.p.stMutable.set(key, value...)
 }
 
 func (w *PageWriter) FlushFinish() error {
 	return w.p.memFlushFinish()
 }
 
-func (w *PageWriter) MaybePageFlush(size uint64) bool {
-	return w.p.maybeScheduleFlush(size, false)
+func (w *PageWriter) FlushCheckAndPush(isForce bool) {
+	if w.p.maybeScheduleFlush(w.p.bp.opts.BitpageFlushSize, isForce) {
+		w.p.bp.PushPageFlushTask(w.p.pn, w.sentinel)
+	}
 }

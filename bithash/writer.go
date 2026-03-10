@@ -25,17 +25,17 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/bindex"
-	"github.com/zuoyebang/bitalosdb/internal/bytepools"
-	"github.com/zuoyebang/bitalosdb/internal/compress"
-	"github.com/zuoyebang/bitalosdb/internal/consts"
-	"github.com/zuoyebang/bitalosdb/internal/crc"
-	"github.com/zuoyebang/bitalosdb/internal/errors"
-	"github.com/zuoyebang/bitalosdb/internal/hash"
-	"github.com/zuoyebang/bitalosdb/internal/unsafe2"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
-	"github.com/zuoyebang/bitalosdb/internal/vfs"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/bindex"
+	"github.com/zuoyebang/bitalosdb/v2/internal/bytepools"
+	"github.com/zuoyebang/bitalosdb/v2/internal/compress"
+	"github.com/zuoyebang/bitalosdb/v2/internal/consts"
+	"github.com/zuoyebang/bitalosdb/v2/internal/crc"
+	"github.com/zuoyebang/bitalosdb/v2/internal/errors"
+	"github.com/zuoyebang/bitalosdb/v2/internal/hash"
+	"github.com/zuoyebang/bitalosdb/v2/internal/os2"
+	"github.com/zuoyebang/bitalosdb/v2/internal/unsafe2"
+	"github.com/zuoyebang/bitalosdb/v2/internal/vfs"
 )
 
 const (
@@ -113,9 +113,9 @@ func newWriter(b *Bithash, f File, filename string, fileNum FileNum) *Writer {
 		indexBlock:    blockWriter{restartInterval: blockRestartInterval},
 		metaBlock:     blockWriter{restartInterval: blockRestartInterval},
 		conflictBlock: blockWriter{restartInterval: blockRestartInterval},
-		indexHash:     make(map[uint32]*hashHandle, 1<<18),
-		indexArray:    make([]hashHandle, 0, 1<<18),
-		conflictKeys:  make(map[string]BlockHandle, 10),
+		indexHash:     make(map[uint32]*hashHandle, 1<<6),
+		indexArray:    make([]hashHandle, 0, 1<<6),
+		conflictKeys:  make(map[string]BlockHandle),
 		currentOffset: 0,
 	}
 	return w
@@ -154,7 +154,7 @@ func (w *Writer) setIoWriter(f writeCloseSyncer) error {
 		return err
 	}
 
-	w.bufWriter = bufio.NewWriterSize(f, consts.BufioWriterBufSize)
+	w.bufWriter = bufio.NewWriterSize(f, consts.BithashBufioWriterSize)
 	w.writer = w.bufWriter
 	w.dataBlock.wr = w.bufWriter
 	return nil
@@ -243,7 +243,7 @@ func (w *Writer) Add(ikey base.InternalKey, value []byte) error {
 		}
 	}
 
-	return w.add(ikey, compressed, hash.Crc32(ikey.UserKey), w.fileNum)
+	return w.add(ikey, compressed, hash.Fnv32(ikey.UserKey), w.fileNum)
 }
 
 func (w *Writer) AddIkey(ikey InternalKey, value []byte, khash uint32, fileNum FileNum) error {
@@ -255,18 +255,20 @@ func (w *Writer) AddIkey(ikey InternalKey, value []byte, khash uint32, fileNum F
 }
 
 func (w *Writer) add(ikey InternalKey, value []byte, khash uint32, fileNum FileNum) error {
-	if ikey.Size() > maxKeySize {
+	keySize := ikey.Size()
+	valueSize := len(value)
+	if keySize > maxKeySize {
 		return ErrBhKeyTooLarge
-	} else if len(value) > maxValueSize {
+	} else if valueSize > maxValueSize {
 		return ErrBhValueTooLarge
 	}
 
-	kvSize := ikey.Size() + recordHeaderSize + len(value)
+	kvSize := keySize + valueSize + recordHeaderSize
 	if w.meta.Size+uint32(kvSize) > dataMaxSize {
-		return errors.Errorf("bithash: panic add exceed data max size curSize:%d addSize:%d", w.meta.Size, kvSize)
+		return errors.Errorf("bithash: panic add exceed data max size curSize:%d addSize:%d", kvSize, w.meta.Size)
 	}
 
-	n, err := w.dataBlock.set(ikey, value, fileNum)
+	n, err := w.dataBlock.set(ikey, keySize, value, valueSize, fileNum)
 	if err != nil {
 		return err
 	}
@@ -570,7 +572,7 @@ func (w *Writer) rebuild() (err error) {
 		w.meta.Size += recordLen
 		w.meta.keyNum++
 		ikey := base.DecodeInternalKey(key)
-		w.updateHash(ikey, hash.Crc32(ikey.UserKey), bh)
+		w.updateHash(ikey, hash.Fnv32(ikey.UserKey), bh)
 	}
 
 	if err != nil && err != io.EOF {
@@ -583,7 +585,7 @@ func (w *Writer) rebuild() (err error) {
 func (w *Writer) Remove() error {
 	w.b.deleteRwwWriters(w.fileNum)
 	w.b.meta.freeFileMetadata(w.fileNum)
-	if utils.IsFileExist(w.filename) {
+	if os2.IsExist(w.filename) {
 		return w.b.fs.Remove(w.filename)
 	}
 	return nil

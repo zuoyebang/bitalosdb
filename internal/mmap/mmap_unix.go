@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build darwin || dragonfly || freebsd || linux || openbsd || solaris || netbsd
-// +build darwin dragonfly freebsd linux openbsd solaris netbsd
+//go:build darwin || dragonfly || freebsd || openbsd || solaris || linux || netbsd
 
 package mmap
 
@@ -46,17 +45,17 @@ func mmapfd(len int, inprot, inflags, fd uintptr, off int64) ([]byte, error) {
 }
 
 func (m Mbuf) flush() error {
-	return unix.Msync([]byte(m), unix.MS_SYNC)
+	return unix.Msync(m, unix.MS_SYNC)
 }
 
 func (m Mbuf) lock() error {
-	return unix.Mlock([]byte(m))
+	return unix.Mlock(m)
 }
 
 func (m Mbuf) unlock() error {
-	return unix.Munlock([]byte(m))
+	return unix.Munlock(m)
 }
 
 func (m Mbuf) unmap() error {
-	return unix.Munmap([]byte(m))
+	return unix.Munmap(m)
 }

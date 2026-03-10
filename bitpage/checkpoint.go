@@ -16,24 +16,17 @@ package bitpage
 
 import (
 	"os"
-	"path"
+	"path/filepath"
 
-	"github.com/zuoyebang/bitalosdb/internal/errors"
-	"github.com/zuoyebang/bitalosdb/internal/os2"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
-	"github.com/zuoyebang/bitalosdb/internal/vfs"
+	"github.com/zuoyebang/bitalosdb/v2/internal/os2"
+	"github.com/zuoyebang/bitalosdb/v2/internal/vfs"
 )
 
 func (b *Bitpage) Checkpoint(fs vfs.FS, dstDir string) (err error) {
-	if os2.IsExist(dstDir) {
-		return errors.Errorf("bitpage: checkpoint dir exist %s", dstDir)
-	}
-
 	var dir vfs.File
 	var files []string
 
-	err = os.Mkdir(dstDir, 0755)
-	if err != nil {
+	if err = os.Mkdir(dstDir, 0755); err != nil {
 		return err
 	}
 	dir, err = fs.OpenDir(dstDir)
@@ -42,30 +35,28 @@ func (b *Bitpage) Checkpoint(fs vfs.FS, dstDir string) (err error) {
 	}
 
 	b.pages.Range(func(k, v interface{}) bool {
-		pn := k.(PageNum)
-		p := v.(*page)
-		if b.PageSplitted(pn) {
+		if b.IsPageFreed(k.(PageNum)) {
 			return true
 		}
 
-		if p.mu.stMutable != nil {
-			if err = p.makeMutableForWrite(true); err != nil {
+		p := v.(*page)
+		if p.stMutable != nil && !p.stMutable.empty() {
+			p.stMutable.writeIdxToFile()
+			if err = p.makeMutableForWrite(); err != nil {
 				return false
 			}
 		}
 
-		for i := range p.mu.stQueue {
-			if !p.mu.stQueue[i].empty() {
-				files = append(files, p.mu.stQueue[i].path())
-				idxPath := p.mu.stQueue[i].idxFilePath()
-				if utils.IsFileExist(idxPath) {
-					files = append(files, idxPath)
-				}
+		for _, st := range p.stQueue {
+			if !st.empty() {
+				stFiles := st.getFilePath()
+				files = append(files, stFiles...)
 			}
 		}
 
-		if p.mu.arrtable != nil {
-			files = append(files, p.mu.arrtable.path())
+		if p.arrtable != nil {
+			atFiles := p.arrtable.getFilePath()
+			files = append(files, atFiles...)
 		}
 
 		return true
@@ -74,12 +65,14 @@ func (b *Bitpage) Checkpoint(fs vfs.FS, dstDir string) (err error) {
 		return err
 	}
 
-	for i := range files {
-		newname := path.Join(dstDir, fs.PathBase(files[i]))
-		if err = vfs.LinkOrCopy(fs, files[i], newname); err != nil {
+	for _, file := range files {
+		if !os2.IsExist(file) {
+			continue
+		}
+		dstFile := filepath.Join(dstDir, fs.PathBase(file))
+		if err = vfs.LinkOrCopy(fs, file, dstFile); err != nil {
 			return err
 		}
-		b.opts.Logger.Infof("bitpage checkpoint save %s to %s", files[i], newname)
 	}
 
 	metaFile := makeFilepath(b.dirname, fileTypeManifest, 0, 0)
@@ -87,7 +80,6 @@ func (b *Bitpage) Checkpoint(fs vfs.FS, dstDir string) (err error) {
 	if err = vfs.Copy(fs, metaFile, metaNewFile); err != nil {
 		return err
 	}
-	b.opts.Logger.Infof("bitpage checkpoint save %s to %s", metaFile, metaNewFile)
 
 	err = dir.Sync()
 	if err != nil {

@@ -21,7 +21,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/zuoyebang/bitalosdb/internal/consts"
+	"github.com/zuoyebang/bitalosdb/v2/internal/consts"
 )
 
 const TestFreelistType = "TEST_FREELIST_TYPE"
@@ -319,10 +319,10 @@ func benchmark_FreelistRelease(b *testing.B, size int) {
 }
 
 func randomPgids(n int) []pgid {
-	rand.Seed(42)
+	rand.New(rand.NewSource(32))
 	pgids := make(pgids, n)
 	for i := range pgids {
-		pgids[i] = pgid(rand.Int63())
+		pgids[i] = pgid(rand.Uint64())
 	}
 	sort.Sort(pgids)
 	return pgids

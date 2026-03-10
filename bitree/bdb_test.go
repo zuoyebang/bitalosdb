@@ -1,3 +1,17 @@
+// Copyright 2019-2024 Xu Ruibo (hustxurb@163.com) and Contributors
+//
+// Licensed under the Apache License, Version 2.0 (the \"License\");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an \"AS IS\" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package bitree
 
 import (
@@ -6,19 +20,20 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/zuoyebang/bitalosdb/bitpage"
-	"github.com/zuoyebang/bitalosdb/bitree/bdb"
-	"github.com/zuoyebang/bitalosdb/internal/consts"
-	"github.com/zuoyebang/bitalosdb/internal/sortedkv"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
+	"github.com/zuoyebang/bitalosdb/v2/bitpage"
+	"github.com/zuoyebang/bitalosdb/v2/bitree/bdb"
+	"github.com/zuoyebang/bitalosdb/v2/internal/consts"
+	"github.com/zuoyebang/bitalosdb/v2/internal/kkv"
+	"github.com/zuoyebang/bitalosdb/v2/internal/sortedkv"
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
 )
 
-func TestBitree_Bdb_Seek(t *testing.T) {
+func TestBdbSeek(t *testing.T) {
 	defer os.RemoveAll(testDir)
 	os.RemoveAll(testDir)
 
 	seekFunc := func(index int) {
-		btree, _ := testOpenBitree()
+		btree, _ := testOpenKKVBitree()
 
 		pn, sentinel, closer := btree.FindKeyPageNum(consts.BdbMaxKey)
 		require.Equal(t, bitpage.PageNum(1), pn)
@@ -85,11 +100,11 @@ func TestBitree_Bdb_Seek(t *testing.T) {
 	}
 }
 
-func TestBitree_Bdb_Seek_LargeKey(t *testing.T) {
+func TestBdbSeekLargeKey(t *testing.T) {
 	defer os.RemoveAll(testDir)
 	os.RemoveAll(testDir)
 
-	btree, _ := testOpenBitree()
+	btree, _ := testOpenKKVBitree()
 	keyPrefix := utils.FuncRandBytes(1100)
 	makeLargeKey := func(i int) []byte {
 		return []byte(fmt.Sprintf("bdb_%s_%d", keyPrefix, i))
@@ -153,17 +168,16 @@ func TestBitree_Bdb_Seek_LargeKey(t *testing.T) {
 	require.NoError(t, testBitreeClose(btree))
 }
 
-func TestBitree_Bdb_SeekPrefixDeleteKey(t *testing.T) {
+func TestBdbSeekPrefixDeleteKey(t *testing.T) {
 	for _, isLarge := range []bool{false, true} {
 		t.Run(fmt.Sprintf("isLarge=%t", isLarge), func(t *testing.T) {
 			defer os.RemoveAll(testDir)
 			os.RemoveAll(testDir)
 
-			btree, _ := testOpenBitree()
+			btree, _ := testOpenKKVBitree()
 			defer testBitreeClose(btree)
 
 			var keyPrefix, largePrefix []byte
-			slotId := uint16(1)
 			verNum := 5
 			verStart := uint64(1024)
 			verEnd := uint64(1030)
@@ -175,7 +189,7 @@ func TestBitree_Bdb_SeekPrefixDeleteKey(t *testing.T) {
 
 			makeKey := func(n int, v uint64) []byte {
 				keyPrefix = []byte(fmt.Sprintf("bdb_%s_%d", largePrefix, n))
-				return sortedkv.MakeKey2(keyPrefix, slotId, v)
+				return sortedkv.MakeVersionKey(keyPrefix, v)
 			}
 
 			err := btree.bdb.Update(func(tx *bdb.Tx) error {
@@ -219,16 +233,16 @@ func TestBitree_Bdb_SeekPrefixDeleteKey(t *testing.T) {
 				require.Equal(t, expNum, len(pns))
 				require.Equal(t, expNum, sentinelsNum)
 
-				seekPrefixDelete := btree.opts.KeyPrefixDeleteFunc(seek)
+				keyVersion := kkv.DecodeKeyVersion(seek)
 				for i := range sentinels {
-					s := btree.opts.KeyPrefixDeleteFunc(sentinels[i])
-					exp := seekPrefixDelete
+					s := kkv.DecodeKeyVersion(sentinels[i])
+					exp := keyVersion
 					if i == sentinelsNum-1 {
 						if version == verEnd {
 							require.Equal(t, consts.BdbMaxKey, sentinels[i])
 							break
 						}
-						exp = seekPrefixDelete + 1
+						exp = keyVersion + 1
 					}
 					require.Equal(t, exp, s)
 				}

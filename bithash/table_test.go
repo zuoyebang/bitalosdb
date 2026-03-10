@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/zuoyebang/bitalosdb/internal/vfs"
+	"github.com/zuoyebang/bitalosdb/v2/internal/vfs"
 )
 
 var testMemFs = vfs.NewMem()

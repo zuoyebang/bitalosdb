@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/zuoyebang/bitalosdb/internal/humanize"
+	"github.com/zuoyebang/bitalosdb/v2/internal/humanize"
 )
 
 func TestCacheMergingIter(t *testing.T) {

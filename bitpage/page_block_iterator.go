@@ -18,15 +18,15 @@ import (
 	"bytes"
 	"sync"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/kkv"
 )
 
-var _ base.InternalIterator = (*pageBlockIterator)(nil)
+var _ InternalKKVIterator = (*pageBlockIterator)(nil)
 
 type pageBlockIterator struct {
 	pb          *pageBlock
 	intIndexPos int
-	iterKey     internalKey
+	iterKey     InternalKKVKey
 	keyBuf      []byte
 	iterValue   []byte
 	sharedCache *sharedInfo
@@ -38,7 +38,7 @@ var pbIterPool = sync.Pool{
 	},
 }
 
-func (pi *pageBlockIterator) findItem() (*internalKey, []byte) {
+func (pi *pageBlockIterator) findItem() (*InternalKKVKey, []byte) {
 	sharedKey1, sharedKey2, value := pi.pb.getSharedKV(pi.intIndexPos, pi.sharedCache)
 	if sharedKey1 == nil {
 		return nil, nil
@@ -52,37 +52,37 @@ func (pi *pageBlockIterator) findItem() (*internalKey, []byte) {
 		key = append(pi.keyBuf, sharedKey2...)
 	}
 
-	pi.iterKey = base.MakeInternalSetKey(key)
+	pi.iterKey = kkv.MakeInternalSetKey(key)
 	pi.iterValue = value
 	return &pi.iterKey, pi.iterValue
 }
 
-func (pi *pageBlockIterator) First() (*internalKey, []byte) {
+func (pi *pageBlockIterator) First() (*InternalKKVKey, []byte) {
 	pi.intIndexPos = 0
 	return pi.findItem()
 }
 
-func (pi *pageBlockIterator) Next() (*internalKey, []byte) {
+func (pi *pageBlockIterator) Next() (*InternalKKVKey, []byte) {
 	pi.intIndexPos++
 	return pi.findItem()
 }
 
-func (pi *pageBlockIterator) Prev() (*internalKey, []byte) {
+func (pi *pageBlockIterator) Prev() (*InternalKKVKey, []byte) {
 	pi.intIndexPos--
 	return pi.findItem()
 }
 
-func (pi *pageBlockIterator) Last() (*internalKey, []byte) {
+func (pi *pageBlockIterator) Last() (*InternalKKVKey, []byte) {
 	pi.intIndexPos = pi.pb.num - 1
 	return pi.findItem()
 }
 
-func (pi *pageBlockIterator) SeekGE(key []byte) (*internalKey, []byte) {
+func (pi *pageBlockIterator) SeekGE(key []byte) (*InternalKKVKey, []byte) {
 	pi.intIndexPos = pi.pb.findKeyByIntIndex(key)
 	return pi.findItem()
 }
 
-func (pi *pageBlockIterator) SeekLT(key []byte) (*internalKey, []byte) {
+func (pi *pageBlockIterator) SeekLT(key []byte) (*InternalKKVKey, []byte) {
 	pi.intIndexPos = pi.pb.findKeyByIntIndex(key)
 	poskey, _ := pi.findItem()
 	if poskey != nil {
@@ -90,17 +90,11 @@ func (pi *pageBlockIterator) SeekLT(key []byte) (*internalKey, []byte) {
 	}
 
 	lastKey, lastValue := pi.Last()
-	if lastKey != nil && bytes.Compare(lastKey.UserKey, key) < 0 {
+	if lastKey != nil && bytes.Compare(lastKey.SubKey, key) < 0 {
 		return lastKey, lastValue
 	}
 
 	return nil, nil
-}
-
-func (pi *pageBlockIterator) SeekPrefixGE(
-	prefix, key []byte, trySeekUsingNext bool,
-) (ikey *internalKey, value []byte) {
-	return pi.SeekGE(key)
 }
 
 func (pi *pageBlockIterator) SetBounds(lower, upper []byte) {

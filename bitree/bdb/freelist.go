@@ -19,8 +19,8 @@ import (
 	"sort"
 	"unsafe"
 
+	"github.com/zuoyebang/bitalosdb/v2/internal/consts"
 	"github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/zuoyebang/bitalosdb/internal/consts"
 )
 
 type txPending struct {

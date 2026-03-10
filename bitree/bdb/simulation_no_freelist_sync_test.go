@@ -17,7 +17,7 @@ package bdb_test
 import (
 	"testing"
 
-	"github.com/zuoyebang/bitalosdb/internal/options"
+	"github.com/zuoyebang/bitalosdb/v2/internal/options"
 )
 
 func TestSimulateNoFreeListSync_1op_1p(t *testing.T) {

@@ -7,6 +7,7 @@
 *.test
 *.out
 .idea
+.continue
 out
 gen
 .vscode
@@ -15,3 +16,4 @@ gen
 *.swp
 *.swo
 data
+test-data

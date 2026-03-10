@@ -19,8 +19,8 @@ import (
 	"io"
 	"unsafe"
 
-	"github.com/zuoyebang/bitalosdb/internal/errors"
-	"github.com/zuoyebang/bitalosdb/internal/manual"
+	"github.com/zuoyebang/bitalosdb/v2/internal/errors"
+	"github.com/zuoyebang/bitalosdb/v2/internal/manual"
 )
 
 const recordHeaderSize = 12
@@ -70,8 +70,7 @@ type block2Writer struct {
 	wr  io.Writer
 }
 
-func (w *block2Writer) set(key InternalKey, value []byte, fileNum FileNum) (int, error) {
-	keySize := key.Size()
+func (w *block2Writer) set(key InternalKey, keySize int, value []byte, valueSize int, fileNum FileNum) (int, error) {
 	preSize := keySize + recordHeaderSize
 	wrn := 0
 
@@ -81,7 +80,7 @@ func (w *block2Writer) set(key InternalKey, value []byte, fileNum FileNum) (int,
 
 	w.buf = w.buf[:preSize]
 	binary.LittleEndian.PutUint32(w.buf[0:4], uint32(keySize))
-	binary.LittleEndian.PutUint32(w.buf[4:8], uint32(len(value)))
+	binary.LittleEndian.PutUint32(w.buf[4:8], uint32(valueSize))
 	binary.LittleEndian.PutUint32(w.buf[8:12], uint32(fileNum))
 
 	key.Encode(w.buf[recordHeaderSize:])
@@ -96,8 +95,8 @@ func (w *block2Writer) set(key InternalKey, value []byte, fileNum FileNum) (int,
 	n, err = w.wr.Write(value)
 	if err != nil {
 		return 0, err
-	} else if n != len(value) {
-		return 0, errors.Errorf("bithash: panic write value return n not eq exp(%d) act(%d)", len(value), n)
+	} else if n != valueSize {
+		return 0, errors.Errorf("bithash: panic write value return n not eq exp(%d) act(%d)", valueSize, n)
 	}
 	wrn += n
 

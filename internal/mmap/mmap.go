@@ -92,12 +92,11 @@ func (m *MMap) ReadInt64At(pos int) int64 {
 }
 
 func (m *MMap) ReadUInt64At(pos int) uint64 {
-	res, _ := binary.Uvarint(m.m[pos : pos+8])
-	return res
+	return binary.LittleEndian.Uint64(m.m[pos : pos+8])
 }
 
 func (m *MMap) WriteUInt64At(val uint64, pos int) {
-	binary.PutUvarint(m.m[pos:pos+8], val)
+	binary.LittleEndian.PutUint64(m.m[pos:pos+8], val)
 }
 
 func (m *MMap) ReadUInt16At(pos int) uint16 {

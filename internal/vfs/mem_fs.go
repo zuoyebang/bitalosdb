@@ -26,8 +26,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/zuoyebang/bitalosdb/internal/errors"
-	"github.com/zuoyebang/bitalosdb/internal/invariants"
+	"github.com/zuoyebang/bitalosdb/v2/internal/errors"
+	"github.com/zuoyebang/bitalosdb/v2/internal/invariants"
 )
 
 const sep = "/"

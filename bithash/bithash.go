@@ -17,12 +17,12 @@ package bithash
 import (
 	"sync"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/compress"
-	"github.com/zuoyebang/bitalosdb/internal/list2"
-	"github.com/zuoyebang/bitalosdb/internal/options"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
-	"github.com/zuoyebang/bitalosdb/internal/vfs"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/compress"
+	"github.com/zuoyebang/bitalosdb/v2/internal/list2"
+	"github.com/zuoyebang/bitalosdb/v2/internal/options"
+	"github.com/zuoyebang/bitalosdb/v2/internal/os2"
+	"github.com/zuoyebang/bitalosdb/v2/internal/vfs"
 )
 
 type FS vfs.FS
@@ -76,7 +76,7 @@ func Open(dirname string, opts *options.BithashOptions) (b *Bithash, err error) 
 		return nil, err
 	}
 
-	b.mufn.fnMap = make(map[FileNum]FileNum, 1<<10)
+	b.mufn.fnMap = make(map[FileNum]FileNum, 128)
 	b.mutw.mutableWriters = list2.NewStack()
 
 	if err = initManifest(b); err != nil {
@@ -174,7 +174,7 @@ func (b *Bithash) RemoveTableFiles(fileNums []FileNum) {
 		b.DeleteReaders(fileNum)
 		b.meta.freeFileMetadata(fileNum)
 		filename := MakeFilepath(b.fs, b.dirname, fileTypeTable, fileNum)
-		if utils.IsFileNotExist(filename) {
+		if os2.IsNotExist(filename) {
 			b.logger.Errorf("bithash RemoveTableFiles not exist file:%s", filename)
 			continue
 		}

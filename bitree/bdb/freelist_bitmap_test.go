@@ -21,9 +21,9 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/zuoyebang/bitalosdb/v2/internal/consts"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/stretchr/testify/require"
-	"github.com/zuoyebang/bitalosdb/internal/consts"
 )
 
 func Test_freelist_bitmap(t *testing.T) {

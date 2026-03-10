@@ -16,14 +16,13 @@ package lfucache
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"log"
 	"runtime/debug"
 
-	"github.com/zuoyebang/bitalosdb/internal/cache/lfucache/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/invariants"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
+	"github.com/zuoyebang/bitalosdb/v2/internal/cache/lfucache/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/invariants"
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
 )
 
 type mergingIterLevel struct {
@@ -38,7 +37,6 @@ type mergingIter struct {
 	levels   []mergingIterLevel
 	heap     mergingIterHeap
 	err      error
-	prefix   []byte
 	lower    []byte
 	upper    []byte
 }
@@ -227,18 +225,14 @@ func (m *mergingIter) findPrevEntry() (*internalKey, []byte) {
 	return nil, nil
 }
 
-func (m *mergingIter) seekGE(key []byte, level int, trySeekUsingNext bool) {
+func (m *mergingIter) seekGE(key []byte, level int) {
 	for ; level < len(m.levels); level++ {
 		if invariants.Enabled && m.lower != nil && bytes.Compare(key, m.lower) < 0 {
 			log.Fatalf("mergingIter: lower bound violation: %s < %s\n%s", key, m.lower, debug.Stack())
 		}
 
 		l := &m.levels[level]
-		if m.prefix != nil {
-			l.iterKey, l.iterValue = l.iter.SeekPrefixGE(m.prefix, key, trySeekUsingNext)
-		} else {
-			l.iterKey, l.iterValue = l.iter.SeekGE(key)
-		}
+		l.iterKey, l.iterValue = l.iter.SeekGE(key)
 	}
 
 	m.initMinHeap()
@@ -254,22 +248,11 @@ func (m *mergingIter) Exist() bool {
 
 func (m *mergingIter) SeekGE(key []byte) (*internalKey, []byte) {
 	m.err = nil
-	m.prefix = nil
-	m.seekGE(key, 0, false)
-	return m.findNextEntry()
-}
-
-func (m *mergingIter) SeekPrefixGE(
-	prefix, key []byte, trySeekUsingNext bool,
-) (*internalKey, []byte) {
-	m.err = nil
-	m.prefix = prefix
-	m.seekGE(key, 0, trySeekUsingNext)
+	m.seekGE(key, 0)
 	return m.findNextEntry()
 }
 
 func (m *mergingIter) seekLT(key []byte, level int) {
-	m.prefix = nil
 	for ; level < len(m.levels); level++ {
 		if invariants.Enabled && m.upper != nil && bytes.Compare(key, m.upper) > 0 {
 			log.Fatalf("mergingIter: upper bound violation: %s > %s\n%s", key, m.upper, debug.Stack())
@@ -284,14 +267,12 @@ func (m *mergingIter) seekLT(key []byte, level int) {
 
 func (m *mergingIter) SeekLT(key []byte) (*internalKey, []byte) {
 	m.err = nil
-	m.prefix = nil
 	m.seekLT(key, 0)
 	return m.findPrevEntry()
 }
 
 func (m *mergingIter) First() (*internalKey, []byte) {
 	m.err = nil
-	m.prefix = nil
 	m.heap.items = m.heap.items[:0]
 	for i := range m.levels {
 		l := &m.levels[i]
@@ -303,7 +284,6 @@ func (m *mergingIter) First() (*internalKey, []byte) {
 
 func (m *mergingIter) Last() (*internalKey, []byte) {
 	m.err = nil
-	m.prefix = nil
 	for i := range m.levels {
 		l := &m.levels[i]
 		l.iterKey, l.iterValue = l.iter.Last()
@@ -336,10 +316,6 @@ func (m *mergingIter) Prev() (*internalKey, []byte) {
 	}
 
 	if m.dir != -1 {
-		if m.prefix != nil {
-			m.err = errors.New("mcache: unsupported reverse prefix iteration")
-			return nil, nil
-		}
 		m.switchToMaxHeap()
 		return m.findPrevEntry()
 	}
@@ -372,7 +348,6 @@ func (m *mergingIter) Close() error {
 }
 
 func (m *mergingIter) SetBounds(lower, upper []byte) {
-	m.prefix = nil
 	m.lower = lower
 	m.upper = upper
 	for i := range m.levels {

@@ -20,7 +20,6 @@ import (
 
 type InternalIterator interface {
 	SeekGE(key []byte) (*InternalKey, []byte)
-	SeekPrefixGE(prefix, key []byte, trySeekUsingNext bool) (*InternalKey, []byte)
 	SeekLT(key []byte) (*InternalKey, []byte)
 	First() (*InternalKey, []byte)
 	Last() (*InternalKey, []byte)

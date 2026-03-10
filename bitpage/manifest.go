@@ -22,12 +22,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zuoyebang/bitalosdb/internal/list2"
-	"github.com/zuoyebang/bitalosdb/internal/mmap"
+	"github.com/zuoyebang/bitalosdb/v2/internal/list2"
+	"github.com/zuoyebang/bitalosdb/v2/internal/mmap"
 )
 
 const (
 	versionV1 uint16 = iota + 1
+)
+
+const (
+	upgradeV1 uint16 = iota
+	upgradeV140
 )
 
 const (
@@ -52,9 +57,10 @@ const (
 	itemStFileNumOffset    = 4
 	itemAtFileNumOffset    = 8
 	itemMinUnflushedOffset = 12
-	itemSplitState         = 16
+	itemPageState          = 16
 	itemCreateTimestamp    = 17
 	itemUpdateTimestamp    = 25
+	itemUpgrade            = 33
 )
 
 type bitpagemeta struct {
@@ -80,14 +86,15 @@ type pagemeta struct {
 	nextStFileNum         FileNum
 	curAtFileNum          FileNum
 	minUnflushedStFileNum FileNum
-	splitState            uint8
+	state                 uint8
 	createTimestamp       uint64
 	updateTimestamp       uint64
+	upgrade               uint16
 }
 
 func openManifest(b *Bitpage) error {
 	b.meta = &bitpagemeta{b: b}
-	b.meta.mu.pagemetaMap = make(map[PageNum]*pagemetaItem, 1<<10)
+	b.meta.mu.pagemetaMap = make(map[PageNum]*pagemetaItem, 1<<4)
 	b.meta.mu.pageFreelist = list2.NewIntQueue(pageMetadataNum)
 
 	filename := makeFilepath(b.dirname, fileTypeManifest, 0, 0)
@@ -101,12 +108,12 @@ func openManifest(b *Bitpage) error {
 		return err
 	}
 
-	b.opts.Logger.Infof("[BITPAGE %d] open manifest success version:%d len:%d uses:%d frees:%d",
-		b.index,
-		b.meta.version,
-		b.meta.mu.manifest.Len(),
-		len(b.meta.mu.pagemetaMap),
-		b.meta.mu.pageFreelist.Len())
+	//b.opts.Logger.Infof("[BITPAGE %d] open manifest success version:%d len:%d uses:%d frees:%d",
+	//	b.index,
+	//	b.meta.version,
+	//	b.meta.mu.manifest.Len(),
+	//	len(b.meta.mu.pagemetaMap),
+	//	b.meta.mu.pageFreelist.Len())
 
 	return nil
 }
@@ -208,11 +215,26 @@ func (m *bitpagemeta) newPagemetaItem(pageNum PageNum) *pagemetaItem {
 	pos := m.getNextPagemetaPos()
 
 	arrIdx := (pos - pagemetaMapOffset) / pageMetadataLen
-	m.reusePagemeta(pageNum, pos, arrIdx)
+	m.resetTupleMate(pageNum, pos, arrIdx, true)
 	pmItem = &(m.mu.pagemetaArray[arrIdx])
 	m.mu.pagemetaMap[pageNum] = pmItem
 
 	return pmItem
+}
+
+func (m *bitpagemeta) freePagemetaItem(pageNum PageNum) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	pmItem := m.getPagemetaItemLocked(pageNum)
+	if pmItem == nil {
+		return
+	}
+
+	arrIdx := (pmItem.pos - pagemetaMapOffset) / pageMetadataLen
+	m.resetTupleMate(PageNum(0), pmItem.pos, arrIdx, false)
+	m.mu.pageFreelist.Push(int32(pmItem.pos))
+	delete(m.mu.pagemetaMap, pageNum)
 }
 
 func (m *bitpagemeta) getPagemetaItem(pageNum PageNum) *pagemetaItem {
@@ -226,88 +248,44 @@ func (m *bitpagemeta) getPagemetaItem(pageNum PageNum) *pagemetaItem {
 	return pmItem
 }
 
-func (m *bitpagemeta) updatePagemetaTimestamp(pageNum PageNum) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	pmItem := m.getPagemetaItemLocked(pageNum)
-	if pmItem == nil {
-		return
-	}
-
-	pmItem.updateTimestamp = uint64(time.Now().UnixMilli())
-	m.mu.manifest.WriteUInt64At(pmItem.updateTimestamp, pmItem.pos+itemUpdateTimestamp)
-}
-
-func (m *bitpagemeta) freePagemetaItem(pageNum PageNum) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	pmItem := m.getPagemetaItemLocked(pageNum)
-	if pmItem == nil {
-		return
-	}
-
-	arrIdx := (pmItem.pos - pagemetaMapOffset) / pageMetadataLen
-	m.resetPagemeta(PageNum(0), pmItem.pos, arrIdx)
-	m.mu.pageFreelist.Push(int32(pmItem.pos))
-	delete(m.mu.pagemetaMap, pageNum)
-}
-
 func (m *bitpagemeta) pagemetaInBuffer(pos int) pagemeta {
 	return pagemeta{
 		pageNum:               PageNum(m.mu.manifest.ReadUInt32At(pos + itemPageNumOffset)),
 		nextStFileNum:         FileNum(m.mu.manifest.ReadUInt32At(pos + itemStFileNumOffset)),
 		curAtFileNum:          FileNum(m.mu.manifest.ReadUInt32At(pos + itemAtFileNumOffset)),
 		minUnflushedStFileNum: FileNum(m.mu.manifest.ReadUInt32At(pos + itemMinUnflushedOffset)),
-		splitState:            m.mu.manifest.ReadUInt8At(pos + itemSplitState),
+		state:                 m.mu.manifest.ReadUInt8At(pos + itemPageState),
 		createTimestamp:       m.mu.manifest.ReadUInt64At(pos + itemCreateTimestamp),
 		updateTimestamp:       m.mu.manifest.ReadUInt64At(pos + itemUpdateTimestamp),
+		upgrade:               m.mu.manifest.ReadUInt16At(pos + itemUpgrade),
 	}
 }
 
-func (m *bitpagemeta) resetPagemeta(pn PageNum, pos, arrIdx int) {
+func (m *bitpagemeta) resetTupleMate(pn PageNum, pos, arrIdx int, reuse bool) {
 	pm := pagemeta{
 		pageNum:               pn,
 		nextStFileNum:         FileNum(1),
 		curAtFileNum:          FileNum(0),
 		minUnflushedStFileNum: FileNum(1),
-		splitState:            0,
+		state:                 0,
 		createTimestamp:       0,
 		updateTimestamp:       0,
+		upgrade:               upgradeV140,
+	}
+
+	if reuse {
+		pm.createTimestamp = uint64(time.Now().UnixMilli())
 	}
 
 	m.mu.pagemetaArray[arrIdx] = pagemetaItem{pm, pos}
-
 	m.mu.manifest.WriteUInt32At(uint32(pm.pageNum), pos+itemPageNumOffset)
 	m.mu.manifest.WriteUInt32At(uint32(pm.nextStFileNum), pos+itemStFileNumOffset)
 	m.mu.manifest.WriteUInt32At(uint32(pm.curAtFileNum), pos+itemAtFileNumOffset)
 	m.mu.manifest.WriteUInt32At(uint32(pm.minUnflushedStFileNum), pos+itemMinUnflushedOffset)
-	m.mu.manifest.WriteUInt8At(pm.splitState, pos+itemSplitState)
+	m.mu.manifest.WriteUInt8At(pm.state, pos+itemPageState)
 	m.mu.manifest.WriteUInt64At(pm.createTimestamp, pos+itemCreateTimestamp)
 	m.mu.manifest.WriteUInt64At(pm.updateTimestamp, pos+itemUpdateTimestamp)
-}
-
-func (m *bitpagemeta) reusePagemeta(pn PageNum, pos, arrIdx int) {
-	pm := pagemeta{
-		pageNum:               pn,
-		nextStFileNum:         FileNum(1),
-		curAtFileNum:          FileNum(0),
-		minUnflushedStFileNum: FileNum(1),
-		splitState:            0,
-		createTimestamp:       uint64(time.Now().UnixMilli()),
-		updateTimestamp:       0,
-	}
-
-	m.mu.pagemetaArray[arrIdx] = pagemetaItem{pm, pos}
-
-	m.mu.manifest.WriteUInt32At(uint32(pm.pageNum), pos+itemPageNumOffset)
-	m.mu.manifest.WriteUInt32At(uint32(pm.nextStFileNum), pos+itemStFileNumOffset)
-	m.mu.manifest.WriteUInt32At(uint32(pm.curAtFileNum), pos+itemAtFileNumOffset)
-	m.mu.manifest.WriteUInt32At(uint32(pm.minUnflushedStFileNum), pos+itemMinUnflushedOffset)
-	m.mu.manifest.WriteUInt8At(pm.splitState, pos+itemSplitState)
-	m.mu.manifest.WriteUInt64At(pm.createTimestamp, pos+itemCreateTimestamp)
-	m.mu.manifest.WriteUInt64At(pm.updateTimestamp, pos+itemUpdateTimestamp)
+	m.mu.manifest.WriteUInt16At(pm.upgrade, pos+itemUpgrade)
 }
 
 func (m *bitpagemeta) getPagemetaItemLocked(pageNum PageNum) *pagemetaItem {
@@ -397,7 +375,7 @@ func (m *bitpagemeta) setMinUnflushedStFileNum(pageNum PageNum, fn FileNum) {
 	m.mu.manifest.WriteUInt32At(uint32(fn), pmItem.pos+itemMinUnflushedOffset)
 }
 
-func (m *bitpagemeta) getSplitState(pageNum PageNum) uint8 {
+func (m *bitpagemeta) getPageState(pageNum PageNum) uint8 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -406,18 +384,56 @@ func (m *bitpagemeta) getSplitState(pageNum PageNum) uint8 {
 		return 0
 	}
 
-	return pmItem.splitState
+	return pmItem.state
 }
 
-func (m *bitpagemeta) setSplitState(pageNum PageNum, state uint8) {
+func (m *bitpagemeta) setPageState(pageNum PageNum, state uint8) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	pmItem := m.getPagemetaItemLocked(pageNum)
-	if pmItem == nil || pmItem.splitState == state {
+	if pmItem == nil || pmItem.state == state {
 		return
 	}
 
-	pmItem.splitState = state
-	m.mu.manifest.WriteUInt8At(state, pmItem.pos+itemSplitState)
+	pmItem.state = state
+	m.mu.manifest.WriteUInt8At(state, pmItem.pos+itemPageState)
+}
+
+func (m *bitpagemeta) updatePageTimestamp(pageNum PageNum) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	pmItem := m.getPagemetaItemLocked(pageNum)
+	if pmItem == nil {
+		return
+	}
+
+	pmItem.updateTimestamp = uint64(time.Now().UnixMilli())
+	m.mu.manifest.WriteUInt64At(pmItem.updateTimestamp, pmItem.pos+itemUpdateTimestamp)
+}
+
+func (m *bitpagemeta) getPageUpgrade(pageNum PageNum) uint16 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	pmItem := m.getPagemetaItemLocked(pageNum)
+	if pmItem == nil {
+		return 0
+	}
+
+	return pmItem.upgrade
+}
+
+func (m *bitpagemeta) setPageUpgrade(pageNum PageNum, upgrade uint16) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	pmItem := m.getPagemetaItemLocked(pageNum)
+	if pmItem == nil || pmItem.upgrade == upgrade {
+		return
+	}
+
+	pmItem.upgrade = upgrade
+	m.mu.manifest.WriteUInt16At(upgrade, pmItem.pos+itemUpgrade)
 }

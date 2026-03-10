@@ -18,7 +18,7 @@ import (
 	"math"
 	"sync/atomic"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
 )
 
 func MaxNodeSize(keySize, valueSize uint32) uint32 {

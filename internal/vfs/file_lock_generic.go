@@ -19,10 +19,9 @@ package vfs
 import (
 	"io"
 	"runtime"
-
-	"github.com/zuoyebang/bitalosdb/internal/errors"
 )
 
 func (defFS) Lock(name string) (io.Closer, error) {
-	return nil, errors.Errorf("bitalosdb: file locking is not implemented on %s/%s", runtime.GOOS, runtime.GOARCH)
+	return nil, errors.Errorf("bitalosdb: file locking is not implemented on %s/%s",
+		errors.Safe(runtime.GOOS), errors.Safe(runtime.GOARCH))
 }

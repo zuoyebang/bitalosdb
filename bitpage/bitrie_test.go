@@ -17,27 +17,12 @@ package bitpage
 import (
 	"bytes"
 	"fmt"
-	"math/rand"
 	"os"
-	"runtime"
 	"testing"
 	"time"
+
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
 )
-
-const (
-	letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-)
-
-func pMem() {
-	var memStats runtime.MemStats
-
-	runtime.ReadMemStats(&memStats)
-
-	fmt.Printf("Allocated memory: %dMB\n", memStats.Alloc/1024/1024)
-	fmt.Printf("Total memory allocated: %dMB\n", memStats.TotalAlloc/1024/1024)
-	fmt.Printf("Memory obtained from OS: %dMB\n", memStats.Sys/1024/1024)
-	fmt.Printf("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n")
-}
 
 func TestBitrie_String(t *testing.T) {
 	os.Remove("bitrie.db")
@@ -45,21 +30,17 @@ func TestBitrie_String(t *testing.T) {
 	trie := NewBitrie()
 	trie.InitWriter()
 
-	pMem()
-
 	totalNum := 1<<20 + 128
 	keylist := make([][]byte, totalNum)
 	valuelist := make([][]byte, totalNum)
 	gomap := make(map[string][]byte, totalNum)
 
 	for i := 0; i < totalNum; i++ {
-		key := fmt.Sprintf("key_prefix_%s_bitalosdb_%s_%d", randBytes(1), randBytes(8), i)
+		key := fmt.Sprintf("key_prefix_%s_bitalosdb_%s_%d", utils.FuncRandBytes(1), utils.FuncRandBytes(8), i)
 		value := []byte(fmt.Sprintf("value_%d", i))
 		keylist[i] = []byte(key)
 		valuelist[i] = value
 	}
-
-	pMem()
 
 	bt := time.Now()
 	for i := 0; i < totalNum; i++ {
@@ -67,8 +48,6 @@ func TestBitrie_String(t *testing.T) {
 	}
 	et := time.Since(bt)
 	fmt.Printf("gomap add time cost = %v\n", et)
-
-	pMem()
 
 	bt = time.Now()
 	for i := 0; i < totalNum; i++ {
@@ -86,7 +65,7 @@ func TestBitrie_String(t *testing.T) {
 	et = time.Since(bt)
 	fmt.Printf("build trie-index time cost = %v; item-count = %d\n", et, trie.length)
 
-	tbl, _ := openTable("bitrie.db", defaultTableOptions)
+	tbl, _ := OpenTable("bitrie.db", defaultTableOptions)
 	defer func() {
 		os.Remove("bitrie.db")
 	}()
@@ -97,7 +76,7 @@ func TestBitrie_String(t *testing.T) {
 	}
 
 	tblbytes := func(offset uint32, size uint32) []byte {
-		return tbl.getBytes(offset, size)
+		return tbl.GetBytes(offset, size)
 	}
 
 	tblsize := func() uint32 {
@@ -109,7 +88,7 @@ func TestBitrie_String(t *testing.T) {
 	et = time.Since(bt)
 	fmt.Printf("flush trie-index time cost = %v, tbl-size=%dMB\n", et, tbl.Size()/1024/1024)
 
-	trie.SetReader(tblbytes(0, tbl.Size()), tableDataOffset)
+	trie.SetReader(tblbytes(0, tbl.Size()), TblDataOffset)
 
 	bt = time.Now()
 	for i := 0; i < totalNum; i++ {
@@ -128,20 +107,16 @@ func TestBitrieV_String(t *testing.T) {
 	trie := NewBitriev()
 	trie.InitWriter()
 
-	pMem()
-
 	totalNum := 1<<20 + 128
 	keylist := make([][]byte, totalNum)
 	valuelist := make([]uint32, totalNum)
 	gomap := make(map[string]uint32, totalNum)
 
 	for i := 0; i < totalNum; i++ {
-		key := fmt.Sprintf("key_prefix_%s_bitalosdb_%s_%d", randBytes(1), randBytes(8), i)
+		key := fmt.Sprintf("key_prefix_%s_bitalosdb_%s_%d", utils.FuncRandBytes(1), utils.FuncRandBytes(8), i)
 		keylist[i] = []byte(key)
 		valuelist[i] = uint32(i + 1)
 	}
-
-	pMem()
 
 	bt := time.Now()
 	for i := 0; i < totalNum; i++ {
@@ -149,8 +124,6 @@ func TestBitrieV_String(t *testing.T) {
 	}
 	et := time.Since(bt)
 	fmt.Printf("gomap add time cost = %v\n", et)
-
-	pMem()
 
 	bt = time.Now()
 	for i := 0; i < totalNum; i++ {
@@ -168,7 +141,7 @@ func TestBitrieV_String(t *testing.T) {
 	et = time.Since(bt)
 	fmt.Printf("build trie-index time cost = %v; item-count = %d\n", et, trie.length)
 
-	tbl, _ := openTable("bitrie.db", defaultTableOptions)
+	tbl, _ := OpenTable("bitrie.db", defaultTableOptions)
 	defer func() {
 		os.Remove("bitrie.db")
 	}()
@@ -179,7 +152,7 @@ func TestBitrieV_String(t *testing.T) {
 	}
 
 	tblbytes := func(offset uint32, size uint32) []byte {
-		return tbl.getBytes(offset, size)
+		return tbl.GetBytes(offset, size)
 	}
 
 	tblsize := func() uint32 {
@@ -191,7 +164,7 @@ func TestBitrieV_String(t *testing.T) {
 	et = time.Since(bt)
 	fmt.Printf("flush trie-index time cost = %v, tbl-size=%dMB\n", et, tbl.Size()/1024/1024)
 
-	trie.SetReader(tblbytes(0, tbl.Size()), tableDataOffset)
+	trie.SetReader(tblbytes(0, tbl.Size()), TblDataOffset)
 
 	bt = time.Now()
 	for i := 0; i < totalNum; i++ {
@@ -202,14 +175,6 @@ func TestBitrieV_String(t *testing.T) {
 	et = time.Since(bt)
 	fmt.Printf("trie-index get time cost = %v\n", et)
 	trie.Finish()
-}
-
-func randBytes(n int) []byte {
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
-	}
-	return b
 }
 
 func TestFindNode(t *testing.T) {

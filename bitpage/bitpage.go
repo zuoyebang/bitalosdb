@@ -17,46 +17,37 @@ package bitpage
 import (
 	"arena"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"sort"
 	"sync"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/cache/lrucache"
-	"github.com/zuoyebang/bitalosdb/internal/consts"
-	"github.com/zuoyebang/bitalosdb/internal/options"
-	"github.com/zuoyebang/bitalosdb/internal/statemachine"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
-	"github.com/zuoyebang/bitalosdb/internal/vfs"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/bitask"
+	"github.com/zuoyebang/bitalosdb/v2/internal/cache/lrucache"
+	"github.com/zuoyebang/bitalosdb/v2/internal/options"
+	"github.com/zuoyebang/bitalosdb/v2/internal/os2"
+	"github.com/zuoyebang/bitalosdb/v2/internal/statemachine"
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
+	"github.com/zuoyebang/bitalosdb/v2/internal/vfs"
 )
 
 type FS vfs.FS
 type File vfs.File
 
-var (
-	ErrPageNotFound    = errors.New("page not exist")
-	ErrPageSplitted    = errors.New("page splitted")
-	ErrPageNotSplitted = errors.New("page not splitted")
-	ErrPageFlushState  = errors.New("page flush state err")
-	ErrTableFull       = errors.New("allocation failed because table is full")
-	ErrTableSize       = errors.New("tbl size is not large enough to hold the header")
-	ErrTableOpenType   = errors.New("tbl open type not support")
-)
-
 type Bitpage struct {
-	meta          *bitpagemeta
-	opts          *options.BitpageOptions
-	pages         sync.Map
-	pageWriters   sync.Map
-	splittedPages sync.Map
-	dirname       string
-	index         int
-	stats         *Stats
-	dbState       *statemachine.DbStateMachine
-	cache         *lrucache.LruCache
-	stArena       *arena.Arena
-	stArenaBuf    []byte
+	meta            *bitpagemeta
+	opts            *options.BitpageOptions
+	pages           sync.Map
+	pageWriters     sync.Map
+	dirname         string
+	index           int
+	stats           *Stats
+	dbState         *statemachine.DbStateMachine
+	cache           *lrucache.LruCache
+	stKeyArena      *arena.Arena
+	stKeyArenaBuf   []byte
+	stValueArena    *arena.Arena
+	stValueArenaBuf []byte
 }
 
 type SplitPageInfo struct {
@@ -66,28 +57,29 @@ type SplitPageInfo struct {
 }
 
 type PageDebugInfo struct {
-	Ct         int64
-	Ut         int64
-	SplitState uint8
+	Ct    int64
+	Ut    int64
+	State string
 }
 
 type fileInfo struct {
-	ft   FileType
-	fn   FileNum
-	path string
+	ft            FileType
+	fn            FileNum
+	path          string
+	keyFilename   string
+	valueFilename string
 }
 
 func Open(dirname string, opts *options.BitpageOptions) (b *Bitpage, err error) {
 	b = &Bitpage{
-		dirname:       dirname,
-		opts:          opts,
-		pages:         sync.Map{},
-		pageWriters:   sync.Map{},
-		splittedPages: sync.Map{},
-		index:         opts.Index,
-		stats:         newStats(),
-		dbState:       opts.DbState,
-		cache:         nil,
+		dirname:     dirname,
+		opts:        opts,
+		pages:       sync.Map{},
+		pageWriters: sync.Map{},
+		index:       opts.Index,
+		stats:       newStats(),
+		dbState:     opts.DbState,
+		cache:       nil,
 	}
 
 	if err = b.opts.FS.MkdirAll(dirname, 0755); err != nil {
@@ -96,17 +88,6 @@ func Open(dirname string, opts *options.BitpageOptions) (b *Bitpage, err error) 
 
 	if err = openManifest(b); err != nil {
 		return nil, err
-	}
-
-	if b.opts.UseBlockCompress {
-		cacheOpts := &options.CacheOptions{
-			Size:     b.opts.BitpageBlockCacheSize,
-			Shards:   consts.BitpageBlockCacheShards,
-			HashSize: consts.BitpageBlockCacheHashSize,
-			Logger:   b.opts.Logger,
-		}
-		b.cache = lrucache.NewLrucache(cacheOpts)
-		b.opts.Logger.Infof("bitpage new block cache ok index:%d size:%d", opts.Index, cacheOpts.Size)
 	}
 
 	defer b.freeStArenaBuf()
@@ -130,7 +111,7 @@ func (b *Bitpage) openPages() error {
 
 	sort.Strings(files)
 
-	pageFiles := make(map[PageNum][]fileInfo, 1<<10)
+	pageFiles := make(map[PageNum][]fileInfo, 16)
 	for i := range files {
 		ft, pn, fn, ok := parseFilename(files[i])
 		if !ok || ft == fileTypeManifest {
@@ -157,14 +138,14 @@ func (b *Bitpage) openPages() error {
 			return err
 		}
 
-		if b.PageSplitted(pageNum) {
+		if b.IsPageFreed(pageNum) {
 			if err = b.FreePage(pageNum, false); err != nil {
-				b.opts.Logger.Errorf("bitpage freePage fail index:%d pn:%s err:%s", b.index, pageNum, err.Error())
+				b.opts.Logger.Fatalf("[BITPAGE %d] page(%d) freePage fail err:%v", b.index, pageNum, err)
 			}
 		} else {
 			b.setPageNoneSplit(pageNum)
-			if p.mu.stMutable == nil {
-				if err = p.makeMutableForWrite(false); err != nil {
+			if p.stMutable == nil {
+				if err = p.makeMutableForWrite(); err != nil {
 					return err
 				}
 			}
@@ -177,7 +158,7 @@ func (b *Bitpage) openPages() error {
 func (b *Bitpage) NewPage() (PageNum, error) {
 	p, err := b.newPageInternal()
 	if err != nil {
-		return PageNum(0), nil
+		return PageNum(0), err
 	}
 	return p.pn, nil
 }
@@ -186,7 +167,7 @@ func (b *Bitpage) newPageInternal() (*page, error) {
 	pn := b.meta.getNextPageNum()
 	b.meta.newPagemetaItem(pn)
 	p := newPage(b, pn)
-	if err := p.makeMutableForWrite(false); err != nil {
+	if err := p.makeMutableForWrite(); err != nil {
 		b.meta.freePagemetaItem(pn)
 		return nil, err
 	}
@@ -198,11 +179,11 @@ func (b *Bitpage) newPageInternal() (*page, error) {
 func (b *Bitpage) FreePage(pn PageNum, checked bool) error {
 	p := b.GetPage(pn)
 	if p == nil {
-		return ErrPageNotFound
+		return base.ErrPageNotFound
 	}
 
-	if checked && !b.PageSplitted(pn) {
-		return ErrPageNotSplitted
+	if checked && !b.IsPageFreed(pn) {
+		return base.ErrPageNotFreed
 	}
 
 	if err := p.close(true); err != nil {
@@ -211,10 +192,13 @@ func (b *Bitpage) FreePage(pn PageNum, checked bool) error {
 
 	b.pages.Delete(pn)
 	b.pageWriters.Delete(pn)
-	b.splittedPages.Delete(pn)
 	b.meta.freePagemetaItem(p.pn)
-
+	b.opts.Logger.Infof("[BITPAGE %d] free page(%d) done", b.index, pn)
 	return nil
+}
+
+func (b *Bitpage) GetDirname() string {
+	return b.dirname
 }
 
 func (b *Bitpage) GetPageDebugInfo(pn PageNum) PageDebugInfo {
@@ -223,7 +207,8 @@ func (b *Bitpage) GetPageDebugInfo(pn PageNum) PageDebugInfo {
 	if pm != nil {
 		pinfo.Ct = int64(pm.createTimestamp)
 		pinfo.Ut = int64(pm.updateTimestamp)
-		pinfo.SplitState = pm.splitState
+		pinfo.State = pageStateDescription[pm.state]
+
 	}
 
 	return pinfo
@@ -255,57 +240,24 @@ func (b *Bitpage) GetPageStMutableDeleteKeyRate(pn PageNum) float64 {
 		return 0
 	}
 
-	total, delCount, pdCount := p.mu.stMutable.getKeyStats()
+	total, delCount, pdCount := p.stMutable.getKeyStats()
 	return p.getDeleteKeyRate(total, delCount, pdCount)
 }
 
 func (b *Bitpage) pageNoneSplit(pn PageNum) bool {
-	return b.meta.getSplitState(pn) == pageSplitStateNone
+	return b.meta.getPageState(pn) == pageStateInit
 }
 
 func (b *Bitpage) setPageNoneSplit(pn PageNum) {
-	b.meta.setSplitState(pn, pageSplitStateNone)
+	b.meta.setPageState(pn, pageStateInit)
 }
 
-func (b *Bitpage) PageSplitted(pn PageNum) bool {
-	return b.meta.getSplitState(pn) == pageSplitStateFinish
+func (b *Bitpage) IsPageFreed(pn PageNum) bool {
+	return b.meta.getPageState(pn) == pageStateFreed
 }
 
-func (b *Bitpage) PageSplitted2(pn PageNum) bool {
-	_, ok := b.splittedPages.Load(pn)
-	return ok
-}
-
-func (b *Bitpage) MarkFreePages(pns []PageNum) {
-	for i := range pns {
-		if b.GetPage(pns[i]) == nil {
-			continue
-		}
-		b.markFreePage(pns[i])
-	}
-}
-
-func (b *Bitpage) markFreePage(pn PageNum) {
-	b.splittedPages.Store(pn, true)
-	b.meta.setSplitState(pn, pageSplitStateFinish)
-}
-
-func (b *Bitpage) CheckFreePages(except PageNum) bool {
-	isAllFree := true
-	b.pages.Range(func(pn, p interface{}) bool {
-		if pn == except {
-			return true
-		}
-
-		if b.PageSplitted(pn.(PageNum)) {
-			return true
-		}
-
-		isAllFree = false
-		return false
-	})
-
-	return isAllFree
+func (b *Bitpage) SetPageFreed(pn PageNum) {
+	b.meta.setPageState(pn, pageStateFreed)
 }
 
 func (b *Bitpage) Get(pn PageNum, key []byte, khash uint32) ([]byte, bool, func(), base.InternalKeyKind) {
@@ -314,6 +266,14 @@ func (b *Bitpage) Get(pn PageNum, key []byte, khash uint32) ([]byte, bool, func(
 		return nil, false, nil, internalKeyKindInvalid
 	}
 	return p.get(key, khash)
+}
+
+func (b *Bitpage) Exist(pn PageNum, key []byte, khash uint32) bool {
+	p := b.GetPage(pn)
+	if p == nil {
+		return false
+	}
+	return p.exist(key, khash)
 }
 
 func (b *Bitpage) makeFilePath(ft FileType, pn PageNum, fn FileNum) string {
@@ -342,10 +302,9 @@ func (b *Bitpage) GetPageWriter(pn PageNum, sentinel []byte) *PageWriter {
 
 	writer := &PageWriter{
 		p:        p,
-		Sentinel: utils.CloneBytes(sentinel),
+		sentinel: utils.CloneBytes(sentinel),
 	}
 	b.pageWriters.Store(pn, writer)
-
 	return writer
 }
 
@@ -368,17 +327,18 @@ func (b *Bitpage) Close() (err error) {
 	return nil
 }
 
-func (b *Bitpage) GetNeedFlushPageNums(isForce bool) []PageNum {
-	var pns []PageNum
+func (b *Bitpage) GetPageInuseSize() []uint64 {
+	var res []uint64
 	b.pages.Range(func(pn, p interface{}) bool {
 		if pg, ok := p.(*page); ok {
-			if pg.maybeScheduleFlush(b.opts.BitpageFlushSize, isForce) {
-				pns = append(pns, pn.(PageNum))
+			inuse := pg.inuseBytes()
+			if inuse > 0 {
+				res = append(res, uint64(pg.pn), inuse)
 			}
 		}
 		return true
 	})
-	return pns
+	return res
 }
 
 func (b *Bitpage) GetPageCount() int {
@@ -390,51 +350,78 @@ func (b *Bitpage) GetPageCount() int {
 	return count
 }
 
-func (b *Bitpage) PageFlush(pn PageNum, sentinel []byte, logTag string) error {
+func (b *Bitpage) PageFlush(pn PageNum, sentinel []byte) error {
 	p := b.GetPage(pn)
 	if p == nil {
-		return ErrPageNotFound
+		return base.ErrPageNotFound
 	}
 
 	defer p.setFlushState(pageFlushStateNone)
 
+	if b.IsPageFreed(pn) {
+		return nil
+	}
+
 	if !p.canFlush() {
-		return ErrPageFlushState
+		return base.ErrPageFlushState
 	}
 
-	if b.PageSplitted(pn) {
-		return ErrPageSplitted
-	}
-
-	return p.flush(sentinel, logTag)
+	return p.flush(sentinel)
 }
 
-func (b *Bitpage) ManualPageFlush(pn PageNum) error {
-	p := b.GetPage(pn)
-	if p == nil {
-		return ErrPageNotFound
-	}
+func (b *Bitpage) MaybeScheduleFlush(getSentinel func(uint32) []byte) {
+	b.pages.Range(func(k, v interface{}) bool {
+		if pg, ok := v.(*page); ok {
+			if pg.maybeScheduleFlush(b.opts.BitpageFlushSize, true) {
+				pn := k.(PageNum)
+				b.PushPageFlushTask(pn, getSentinel(uint32(pn)))
+			}
+		}
+		return true
+	})
+}
 
-	p.setFlushState(pageFlushStateSendTask)
-	return b.PageFlush(pn, nil, "")
+func (b *Bitpage) PushPageFlushTask(pn PageNum, sentinel []byte) {
+	p := b.GetPage(pn)
+	if p != nil && p.canSendFlushTask() {
+		p.setFlushState(pageFlushStateSendTask)
+		b.meta.updatePageTimestamp(pn)
+		b.opts.BitpageTaskPushFunc(&bitask.BitpageTaskData{
+			Index:    b.opts.Index,
+			Event:    bitask.BitpageEventFlush,
+			Pn:       uint32(pn),
+			Sentinel: sentinel,
+		})
+	}
+}
+
+func (b *Bitpage) ManualFlushIndexes() {
+	b.pages.Range(func(pn, p interface{}) bool {
+		if pg, ok := p.(*page); ok {
+			st := pg.stMutable
+			st.flushIndexes()
+		}
+		return true
+	})
 }
 
 func (b *Bitpage) PageSplitStart(pn PageNum, log string) (sps []*SplitPageInfo, err error) {
 	p := b.GetPage(pn)
 	if p == nil {
-		err = ErrPageNotFound
+		err = base.ErrPageNotFound
 		return
 	}
 
-	if b.meta.getSplitState(pn) >= pageSplitStateStart {
-		err = ErrPageSplitted
+	if b.meta.getPageState(pn) >= pageStateSplitStart {
+		err = base.ErrPageSplitted
 		return
 	}
-	b.meta.setSplitState(pn, pageSplitStateStart)
+	b.meta.setPageState(pn, pageStateSplitStart)
 
-	var pages [consts.BitpageSplitNum]*page
-	var pns [consts.BitpageSplitNum]uint32
-	splitNum := consts.BitpageSplitNum
+	splitNum := b.opts.SplitNum
+	pages := make([]*page, splitNum)
+	pns := make([]uint32, splitNum)
+
 	for i := 0; i < splitNum; i++ {
 		pages[i], err = b.newPageInternal()
 		if err != nil {
@@ -445,7 +432,7 @@ func (b *Bitpage) PageSplitStart(pn PageNum, log string) (sps []*SplitPageInfo, 
 	}
 
 	logTag := fmt.Sprintf("%s split %s to %v", log, p.pn, pns)
-	if err = p.split(logTag, pages[:]); err != nil {
+	if err = p.split(logTag, pages); err != nil {
 		return
 	}
 
@@ -466,9 +453,9 @@ func (b *Bitpage) PageSplitEnd(pn PageNum, sps []*SplitPageInfo, retErr error) {
 		for i := range sps {
 			b.meta.setNextArrayTableFileNum(sps[i].Pn)
 		}
-		b.markFreePage(pn)
+		b.SetPageFreed(pn)
 	} else {
-		if retErr == ErrPageSplitted || retErr == ErrPageNotFound {
+		if retErr == base.ErrPageSplitted || retErr == base.ErrPageNotFound {
 			return
 		}
 
@@ -486,22 +473,18 @@ func (b *Bitpage) ResetStats() {
 }
 
 func (b *Bitpage) Stats() *Stats {
-	b.stats.Size = utils.GetDirSize(b.dirname)
+	b.stats.Size = os2.GetDirSize(b.dirname)
 
 	return b.stats
 }
 
-func (b *Bitpage) StatsToString() string {
-	return b.stats.String()
-}
-
 func (b *Bitpage) deleteBithashKey(value []byte) {
-	if len(value) == 0 {
+	if b.opts.BithashDeleteCB == nil || len(value) == 0 {
 		return
 	}
 
-	dv := base.DecodeInternalValue(value)
-	if dv.Kind() == base.InternalKeyKindSetBithash && base.CheckValueValidByKeySetBithash(dv.UserValue) {
+	isSeparate, _, dv := base.DecodeInternalValue(value)
+	if isSeparate && base.CheckValueBithashValid(dv.UserValue) {
 		fn := binary.LittleEndian.Uint32(dv.UserValue)
 		if err := b.opts.BithashDeleteCB(fn); err != nil {
 			b.opts.Logger.Errorf("delete bithash key fail err:%v", err)
@@ -509,25 +492,45 @@ func (b *Bitpage) deleteBithashKey(value []byte) {
 	}
 }
 
-func (b *Bitpage) getStArenaBuf(sz int) []byte {
+func (b *Bitpage) getStKeyArenaBuf(sz int) []byte {
 	alloc := utils.CalcBitsSize(sz)
 
-	if b.stArena == nil {
-		b.stArena = arena.NewArena()
-		b.stArenaBuf = arena.MakeSlice[byte](b.stArena, alloc, alloc)
-	} else if cap(b.stArenaBuf) < sz {
-		b.stArena.Free()
-		b.stArena = arena.NewArena()
-		b.stArenaBuf = arena.MakeSlice[byte](b.stArena, alloc, alloc)
+	if b.stKeyArena == nil {
+		b.stKeyArena = arena.NewArena()
+		b.stKeyArenaBuf = arena.MakeSlice[byte](b.stKeyArena, alloc, alloc)
+	} else if cap(b.stKeyArenaBuf) < sz {
+		b.stKeyArena.Free()
+		b.stKeyArena = arena.NewArena()
+		b.stKeyArenaBuf = arena.MakeSlice[byte](b.stKeyArena, alloc, alloc)
 	}
 
-	return b.stArenaBuf
+	return b.stKeyArenaBuf
+}
+
+func (b *Bitpage) getStValueArenaBuf(sz int) []byte {
+	alloc := utils.CalcBitsSize(sz)
+
+	if b.stValueArena == nil {
+		b.stValueArena = arena.NewArena()
+		b.stValueArenaBuf = arena.MakeSlice[byte](b.stValueArena, alloc, alloc)
+	} else if cap(b.stValueArenaBuf) < sz {
+		b.stValueArena.Free()
+		b.stValueArena = arena.NewArena()
+		b.stValueArenaBuf = arena.MakeSlice[byte](b.stValueArena, alloc, alloc)
+	}
+
+	return b.stValueArenaBuf
 }
 
 func (b *Bitpage) freeStArenaBuf() {
-	if b.stArena != nil {
-		b.stArena.Free()
-		b.stArena = nil
-		b.stArenaBuf = nil
+	if b.stKeyArena != nil {
+		b.stKeyArena.Free()
+		b.stKeyArena = nil
+		b.stKeyArenaBuf = nil
+	}
+	if b.stValueArena != nil {
+		b.stValueArena.Free()
+		b.stValueArena = nil
+		b.stValueArenaBuf = nil
 	}
 }

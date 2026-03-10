@@ -21,10 +21,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/cache/lrucache"
-	"github.com/zuoyebang/bitalosdb/internal/hash"
-	"github.com/zuoyebang/bitalosdb/internal/options"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/cache/lrucache"
+	"github.com/zuoyebang/bitalosdb/v2/internal/hash"
+	"github.com/zuoyebang/bitalosdb/v2/internal/options"
 )
 
 func testNewCache() *LfuCache {
@@ -97,7 +97,7 @@ func Test_GetIter_VS_GET(t *testing.T) {
 	bt := time.Now()
 	for i := startNum; i <= totalNum_total; i++ {
 		key := []byte(fmt.Sprintf("lfucache_key_%d", i))
-		khash := hash.Crc32(key)
+		khash := hash.Fnv32(key)
 		khashs[i] = khash
 		if i <= totalNum {
 			lc.bucketByHash(khash).set(key, value)
@@ -168,7 +168,7 @@ func Test_LFU_VS_LRU(t *testing.T) {
 	bt := time.Now()
 	for i := startNum; i <= totalNum_total; i++ {
 		key := []byte(fmt.Sprintf("lfucache_key_%d", i))
-		khash := hash.Crc32(key)
+		khash := hash.Fnv32(key)
 		if i <= totalNum {
 			lfu.bucketByHash(khash).set(key, value)
 		}
@@ -193,7 +193,7 @@ func Test_LFU_VS_LRU(t *testing.T) {
 	bt = time.Now()
 	for i := startNum; i <= totalNum_total; i++ {
 		key := []byte(fmt.Sprintf("lfucache_key_%d", i))
-		khash := hash.Crc32(key)
+		khash := hash.Fnv32(key)
 		val, closer, found := lfu.bucketByHash(khash).get(key)
 		if found && bytes.Equal(val, value) {
 			closer()

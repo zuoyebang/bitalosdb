@@ -136,12 +136,23 @@ func TestEncodeInternalValue(t *testing.T) {
 	seqNum := uint64(10)
 	kind := InternalKeyKindSet
 	encodeValue, closer := EncodeInternalValue(value, seqNum, kind)
-	defer func() {
-		if closer != nil {
-			closer()
-		}
-	}()
-	iv := DecodeInternalValue(encodeValue)
+	ev := make([]byte, len(encodeValue)+1)
+	ev[0] = InternalValueKindSet
+	copy(ev[1:], encodeValue)
+	isSeparate, v, iv := DecodeInternalValue(ev)
+	require.Equal(t, false, isSeparate)
+	require.Equal(t, encodeValue, v)
+	closer()
+
+	ev[0] = InternalValueKindBithash
+	isSeparate, v, iv = DecodeInternalValue(ev)
+	require.Equal(t, true, isSeparate)
+	require.Equal(t, []byte(nil), v)
 	require.Equal(t, iv.SeqNum(), seqNum)
 	require.Equal(t, iv.Kind(), kind)
+	closer()
+
+	isSeparate, v, iv = DecodeInternalValue(nil)
+	require.Equal(t, false, isSeparate)
+	require.Equal(t, []byte(nil), v)
 }

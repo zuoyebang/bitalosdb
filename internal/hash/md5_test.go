@@ -23,6 +23,8 @@ import (
 	"io"
 	"testing"
 	"unsafe"
+
+	"github.com/zuoyebang/bitalosdb/v2/internal/errors"
 )
 
 type md5Test struct {
@@ -193,7 +195,7 @@ var largeUnmarshalTests = []unmarshalTest{
 func safeSum(h hash.Hash) (sum []byte, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("sum panic: %v", r)
+			err = errors.Errorf("sum panic: %v", r)
 		}
 	}()
 

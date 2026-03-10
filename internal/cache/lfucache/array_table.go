@@ -21,8 +21,8 @@ import (
 	"os"
 	"sort"
 
-	"github.com/zuoyebang/bitalosdb/internal/cache/lfucache/internal/arenaskl"
-	"github.com/zuoyebang/bitalosdb/internal/manual"
+	"github.com/zuoyebang/bitalosdb/v2/internal/cache/lfucache/internal/arenaskl"
+	"github.com/zuoyebang/bitalosdb/v2/internal/manual"
 )
 
 const (

@@ -15,14 +15,15 @@
 package bitpage
 
 import (
-	"bytes"
+	"math/rand"
 	"sync"
 	"sync/atomic"
 
-	"github.com/zuoyebang/bitalosdb/internal/consts"
-	"github.com/zuoyebang/bitalosdb/internal/invariants"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
-	"golang.org/x/exp/rand"
+	"github.com/zuoyebang/bitalosdb/v2/internal/consts"
+	"github.com/zuoyebang/bitalosdb/v2/internal/invariants"
+	"github.com/zuoyebang/bitalosdb/v2/internal/iterator"
+	"github.com/zuoyebang/bitalosdb/v2/internal/os2"
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
 )
 
 const (
@@ -33,11 +34,18 @@ const (
 )
 
 const (
-	pageSplitStateNone uint8 = iota
-	pageSplitStateSendTask
-	pageSplitStateStart
-	pageSplitStateFinish
+	pageStateInit uint8 = iota
+	pageStateSplitSendTask
+	pageStateSplitStart
+	pageStateFreed
 )
+
+var pageStateDescription = map[uint8]string{
+	pageStateInit:          "init",
+	pageStateSplitSendTask: "splitSendTask",
+	pageStateSplitStart:    "splitStart",
+	pageStateFreed:         "freed",
+}
 
 type page struct {
 	bp         *Bitpage
@@ -45,17 +53,13 @@ type page struct {
 	dirname    string
 	maxKey     []byte
 	flushState atomic.Uint32
-
-	mu struct {
-		sync.RWMutex
-		stMutable *superTable
-		stQueue   flushableList
-		arrtable  *flushableEntry
-	}
+	stMutable  *flushableEntry
+	stQueue    flushableList
+	arrtable   *flushableEntry
 
 	readState struct {
 		sync.RWMutex
-		val *readState
+		val *pageReadState
 	}
 }
 
@@ -67,39 +71,34 @@ func newPage(bp *Bitpage, pn PageNum) *page {
 	}
 }
 
-func (p *page) openFiles(pm *pagemetaItem, files []fileInfo) error {
-	var deleteFiles []string
-
-	addDeleteFile := func(name string) {
-		if utils.IsFileNotExist(name) {
-			return
-		}
-		deleteFiles = append(deleteFiles, name)
-	}
-
-	for _, f := range files {
-		switch f.ft {
+func (p *page) openFiles(pm *pagemetaItem, files []fileInfo) (err error) {
+	for _, finfo := range files {
+		switch finfo.ft {
 		case fileTypeSuperTable:
-			if f.fn >= pm.nextStFileNum || f.fn < pm.minUnflushedStFileNum {
-				addDeleteFile(f.path)
-			} else if err := p.newSuperTable(f.path, f.fn, true); err != nil {
-				return err
-			}
-		case fileTypeArrayTable:
-			if f.fn == pm.curAtFileNum {
-				_, atEntry, err := p.newArrayTable(f.path, f.fn, true)
-				if err != nil {
-					return err
-				}
-				p.mu.arrtable = atEntry
+			if finfo.fn >= pm.nextStFileNum || finfo.fn < pm.minUnflushedStFileNum {
+				p.deleteObsoleteFiles(finfo.path)
 			} else {
-				addDeleteFile(f.path)
+				err = p.newSuperTable(finfo.path, finfo.fn, true)
 			}
+		case fileTypeSuperTableIndex, fileTypeSklTableIndex:
+			if finfo.fn >= pm.nextStFileNum || finfo.fn < pm.minUnflushedStFileNum {
+				p.deleteObsoleteFiles(finfo.path)
+			}
+		case fileTypeVectorArrayTable:
+			if finfo.fn == pm.curAtFileNum {
+				_, p.arrtable, err = p.newVectorArrayTable(finfo.path, finfo.fn, true)
+			} else {
+				p.deleteObsoleteFiles(finfo.path)
+			}
+		case fileTypeArrayTableIndex:
+			if finfo.fn != pm.curAtFileNum {
+				p.deleteObsoleteFiles(finfo.path)
+			}
+		default:
 		}
-	}
-
-	if len(deleteFiles) > 0 {
-		p.bp.opts.DeleteFilePacer.AddFiles(deleteFiles)
+		if err != nil {
+			return err
+		}
 	}
 
 	p.updateReadState()
@@ -107,20 +106,7 @@ func (p *page) openFiles(pm *pagemetaItem, files []fileInfo) error {
 	return nil
 }
 
-func (p *page) makeMutableForWrite(flushIdx bool) error {
-	st := p.mu.stMutable
-	if st != nil {
-		if st.empty() {
-			return nil
-		}
-
-		if flushIdx {
-			if err := st.writeIdxToFile(); err != nil {
-				return err
-			}
-		}
-	}
-
+func (p *page) makeMutableForWrite() error {
 	fn := p.bp.meta.getNextStFileNum(p.pn)
 	path := p.bp.makeFilePath(fileTypeSuperTable, p.pn, fn)
 	if err := p.newSuperTable(path, fn, false); err != nil {
@@ -139,27 +125,77 @@ func (p *page) newSuperTable(path string, fn FileNum, exist bool) error {
 
 	invariants.SetFinalizer(st, checkSuperTable)
 
-	idxPath := st.getIdxFilePath()
 	entry := p.newFlushableEntry(st, fn)
 	entry.release = func() {
 		if entry.obsolete {
 			st.indexModified = false
 		}
 
-		if err := st.close(); err != nil {
-			p.bp.opts.Logger.Errorf("bitpage close superTable fail file:%s err:%s", path, err.Error())
+		if err = st.close(); err != nil {
+			p.bp.opts.Logger.Errorf("bitpage close superTable fail file:%s err:%s", path, err)
 		}
 
 		if entry.obsolete {
-			p.deleteObsoleteFile(path)
-			p.deleteObsoleteFile(idxPath)
+			files := entry.getFilePath()
+			p.deleteObsoleteFiles(files...)
 		}
 	}
 
-	p.mu.stMutable = st
-	p.mu.stQueue = append(p.mu.stQueue, entry)
+	p.stMutable = entry
+	p.stQueue = append(p.stQueue, entry)
 
 	return nil
+}
+
+func (p *page) newSklTable(path string, fn FileNum, exist bool) error {
+	st, err := newSklTable(p, path, fn, exist, consts.BitpageStiCompressCountDefault)
+	if err != nil {
+		return err
+	}
+
+	invariants.SetFinalizer(st, checkSklTable)
+
+	entry := p.newFlushableEntry(st, fn)
+	entry.release = func() {
+		if entry.obsolete {
+			st.indexModified = false
+		}
+
+		if err = st.close(); err != nil {
+			p.bp.opts.Logger.Errorf("bitpage close sklTable fail file:%s err:%s", path, err)
+		}
+
+		if entry.obsolete {
+			files := entry.getFilePath()
+			p.deleteObsoleteFiles(files...)
+		}
+	}
+
+	p.stMutable = entry
+	p.stQueue = append(p.stQueue, entry)
+
+	return nil
+}
+
+func (p *page) newVectorArrayTable(path string, fn FileNum, exist bool) (*vectorArrayTable, *flushableEntry, error) {
+	at, err := newVectorArrayTable(p, path, fn, exist)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	entry := p.newFlushableEntry(at, fn)
+	entry.release = func() {
+		if err = at.close(); err != nil {
+			p.bp.opts.Logger.Errorf("bitpage close vectorArrayTable fail file:%s err:%s", path, err)
+		}
+
+		if entry.obsolete {
+			files := entry.getFilePath()
+			p.deleteObsoleteFiles(files...)
+		}
+	}
+
+	return at, entry, nil
 }
 
 func (p *page) newArrayTable(path string, fn FileNum, exist bool) (*arrayTable, *flushableEntry, error) {
@@ -174,12 +210,7 @@ func (p *page) newArrayTable(path string, fn FileNum, exist bool) (*arrayTable, 
 	if exist {
 		at, err = openArrayTable(path, &cacheOpts)
 	} else {
-		opts := atOptions{
-			useMapIndex:       p.bp.opts.UseMapIndex,
-			usePrefixCompress: p.bp.opts.UsePrefixCompress,
-			useBlockCompress:  p.bp.opts.UseBlockCompress,
-			blockSize:         consts.BitpageBlockSize,
-		}
+		opts := atOptions{}
 		at, err = newArrayTable(path, &opts, &cacheOpts)
 	}
 	if err != nil {
@@ -190,12 +221,13 @@ func (p *page) newArrayTable(path string, fn FileNum, exist bool) (*arrayTable, 
 
 	entry := p.newFlushableEntry(at, fn)
 	entry.release = func() {
-		if err := at.close(); err != nil {
-			p.bp.opts.Logger.Errorf("bitpage close arrayTable fail file:%s err:%s", path, err.Error())
+		if err = at.close(); err != nil {
+			p.bp.opts.Logger.Errorf("bitpage close arrayTable fail file:%s err:%s", path, err)
 		}
 
 		if entry.obsolete {
-			p.deleteObsoleteFile(path)
+			files := entry.getFilePath()
+			p.deleteObsoleteFiles(files...)
 		}
 	}
 
@@ -212,19 +244,18 @@ func (p *page) newFlushableEntry(f flushable, fn FileNum) *flushableEntry {
 	return entry
 }
 
-func (p *page) getFilesPath() []string {
-	var paths []string
-	for _, st := range p.mu.stQueue {
-		paths = append(paths, st.path())
-		idxFile := st.idxFilePath()
-		if utils.IsFileExist(idxFile) {
-			paths = append(paths, idxFile)
-		}
+func (p *page) getFilesPath() (files []string) {
+	for _, st := range p.stQueue {
+		stFiles := st.getFilePath()
+		files = append(files, stFiles...)
 	}
-	if p.mu.arrtable != nil {
-		paths = append(paths, p.mu.arrtable.path())
+
+	if p.arrtable != nil {
+		atFiles := p.arrtable.getFilePath()
+		files = append(files, atFiles...)
 	}
-	return paths
+
+	return files
 }
 
 func (p *page) close(delete bool) error {
@@ -234,24 +265,24 @@ func (p *page) close(delete bool) error {
 	}
 	p.readState.Unlock()
 
-	for i := range p.mu.stQueue {
+	for i := range p.stQueue {
 		if delete {
-			p.mu.stQueue[i].setObsolete()
+			p.stQueue[i].setObsolete()
 		}
-		p.mu.stQueue[i].readerUnref()
+		p.stQueue[i].readerUnref()
 	}
 
-	if p.mu.arrtable != nil {
+	if p.arrtable != nil {
 		if delete {
-			p.mu.arrtable.setObsolete()
+			p.arrtable.setObsolete()
 		}
-		p.mu.arrtable.readerUnref()
+		p.arrtable.readerUnref()
 	}
 
 	return nil
 }
 
-func (p *page) loadReadState() (*readState, func()) {
+func (p *page) loadReadState() (*pageReadState, func()) {
 	p.readState.RLock()
 	state := p.readState.val
 	state.stMutable.mmapRLock()
@@ -264,10 +295,10 @@ func (p *page) loadReadState() (*readState, func()) {
 }
 
 func (p *page) updateReadState() {
-	s := &readState{
-		stMutable: p.mu.stMutable,
-		stQueue:   p.mu.stQueue,
-		arrtable:  p.mu.arrtable,
+	s := &pageReadState{
+		stMutable: p.stMutable,
+		stQueue:   p.stQueue,
+		arrtable:  p.arrtable,
 	}
 	s.refcnt.Store(1)
 
@@ -291,34 +322,30 @@ func (p *page) updateReadState() {
 
 func (p *page) get(key []byte, khash uint32) ([]byte, bool, func(), internalKeyKind) {
 	rs, rsCloser := p.loadReadState()
-
-	stIndex := len(rs.stQueue) - 1
-	for stIndex >= 0 {
+	for stIndex := len(rs.stQueue) - 1; stIndex >= 0; stIndex-- {
 		st := rs.stQueue[stIndex]
-		val, exist, kind, _ := st.get(key, khash)
+		val, exist, kind := st.get(key, khash)
 		if exist {
 			switch kind {
 			case internalKeyKindSet, internalKeyKindPrefixDelete:
+				if val == nil {
+					val = []byte{}
+				}
 				return val, true, rsCloser, kind
 			case internalKeyKindDelete:
 				rsCloser()
 				return nil, false, nil, kind
 			}
 		}
-
-		stIndex--
 	}
 
 	if rs.arrtable != nil {
-		val, exist, _, atCloser := rs.arrtable.get(key, khash)
+		val, exist, _ := rs.arrtable.get(key, khash)
 		if exist {
-			closer := func() {
-				rsCloser()
-				if atCloser != nil {
-					atCloser()
-				}
+			if val == nil {
+				val = []byte{}
 			}
-			return val, true, closer, internalKeyKindSet
+			return val, true, func() { rsCloser() }, internalKeyKindSet
 		}
 	}
 
@@ -326,77 +353,82 @@ func (p *page) get(key []byte, khash uint32) ([]byte, bool, func(), internalKeyK
 	return nil, false, nil, internalKeyKindInvalid
 }
 
-func (p *page) newIter(o *iterOptions) *PageIterator {
+func (p *page) exist(key []byte, khash uint32) bool {
 	rs, rsCloser := p.loadReadState()
+	defer rsCloser()
+	for stIndex := len(rs.stQueue) - 1; stIndex >= 0; stIndex-- {
+		st := rs.stQueue[stIndex]
+		exist, kind := st.exist(key, khash)
+		if exist {
+			switch kind {
+			case internalKeyKindSet, internalKeyKindPrefixDelete:
+				return true
+			case internalKeyKindDelete:
+				return false
+			}
+		}
+	}
 
+	if rs.arrtable == nil {
+		return false
+	}
+
+	exist, _ := rs.arrtable.exist(key, khash)
+	return exist
+}
+
+func (p *page) newIter(o *iterOptions) *PageIterator {
+	if o == nil {
+		o = &iterOptions{}
+	}
+	rs, rsCloser := p.loadReadState()
 	buf := pageIterAllocPool.Get().(*pageIterAlloc)
 	dbi := &buf.dbi
 	*dbi = PageIterator{
-		alloc:               buf,
-		cmp:                 bytes.Compare,
-		equal:               bytes.Equal,
-		readState:           rs,
-		readStateCloser:     rsCloser,
-		iter:                &buf.merging,
-		key:                 &buf.key,
-		keyBuf:              buf.keyBuf,
-		prefixOrFullSeekKey: buf.prefixOrFullSeekKey,
-	}
-	if o != nil {
-		dbi.opts = *o
+		alloc:  buf,
+		closer: rsCloser,
+		iter:   &buf.merging,
+		key:    buf.key,
+		opts:   *o,
 	}
 	dbi.opts.Logger = p.bp.opts.Logger
-
 	sts := rs.stQueue
-	mlevels := buf.mlevels[:0]
+	mLevels := buf.mLevels[:0]
 	numMergingLevels := len(sts)
 	if rs.arrtable != nil {
 		numMergingLevels++
 	}
-	if numMergingLevels > cap(mlevels) {
-		mlevels = make([]mergingIterLevel, 0, numMergingLevels)
+	if numMergingLevels > cap(mLevels) {
+		mLevels = make([]iterator.KKVMergingIterLevel, 0, numMergingLevels)
 	}
 
 	for i := len(sts) - 1; i >= 0; i-- {
-		mlevels = append(mlevels, mergingIterLevel{
-			iter: sts[i].newIter(&dbi.opts),
-		})
+		iter := sts[i].newIter(&dbi.opts)
+		if iter != nil {
+			mLevels = append(mLevels, iterator.NewKKVMergingIterLevel(iter))
+		}
 	}
 
 	if rs.arrtable != nil {
-		mlevels = append(mlevels, mergingIterLevel{
-			iter: rs.arrtable.newIter(&dbi.opts),
-		})
+		iter := rs.arrtable.newIter(&dbi.opts)
+		mLevels = append(mLevels, iterator.NewKKVMergingIterLevel(iter))
 	}
 
-	buf.merging.Init(&dbi.opts, dbi.cmp, mlevels...)
+	buf.merging.Init(&dbi.opts, mLevels...)
 	return dbi
 }
 
-func (p *page) set(key internalKey, value []byte) error {
-	p.mu.RLock()
-	st := p.mu.stMutable
-	p.mu.RUnlock()
-
-	st.kindStatis(key.Kind())
-	return st.set(key, value)
-}
-
-func (p *page) setMulti(key internalKey, values ...[]byte) error {
-	p.mu.RLock()
-	st := p.mu.stMutable
-	p.mu.RUnlock()
-
-	st.kindStatis(key.Kind())
-	return st.setMulti(key, values...)
-}
-
-func (p *page) deleteObsoleteFile(filename string) {
-	if utils.IsFileNotExist(filename) {
-		return
+func (p *page) deleteObsoleteFiles(filenames ...string) {
+	var files []string
+	for _, filename := range filenames {
+		if os2.IsExist(filename) {
+			files = append(files, filename)
+		}
 	}
 
-	p.bp.opts.DeleteFilePacer.AddFile(filename)
+	if len(files) > 0 {
+		p.bp.opts.DeleteFilePacer.AddFiles(files)
+	}
 }
 
 func (p *page) canSendFlushTask() bool {
@@ -415,8 +447,20 @@ func (p *page) setFlushState(v uint32) {
 	p.flushState.Store(v)
 }
 
+func (p *page) inuseBytes() uint64 {
+	stSize := p.stMutable.inuseBytes()
+	if stSize < consts.BitpageMutableMinSize {
+		return 0
+	}
+	if p.arrtable == nil {
+		return stSize
+	}
+	atSize := p.arrtable.inuseBytes()
+	return stSize + atSize
+}
+
 func (p *page) memFlushFinish() error {
-	return p.mu.stMutable.mergeIndexes()
+	return p.stMutable.flushFinish()
 }
 
 func (p *page) maybeScheduleFlush(flushSize uint64, isForce bool) bool {
@@ -437,17 +481,16 @@ func (p *page) maybeScheduleFlush(flushSize uint64, isForce bool) bool {
 	)
 
 	if isForce {
-		p.setFlushState(pageFlushStateSendTask)
 		p.bp.opts.Logger.Infof("[BITPAGE %d] need flush by force pn:%s", p.bp.index, p.pn)
 		return true
 	}
 
-	stNum = len(p.mu.stQueue)
+	stNum = len(p.stQueue)
 	if stNum == 1 {
-		mtKeyNum = p.mu.stMutable.itemCount()
-		mtSize = p.mu.stMutable.inuseBytes()
-		mtModTime = p.mu.stMutable.getModTime()
-		mtKeyTotal, mtDelKeyCount, mtPdKeyCount = p.mu.stMutable.getKeyStats()
+		mtKeyNum = p.stMutable.itemCount()
+		mtSize = p.stMutable.inuseBytes()
+		mtModTime = p.stMutable.getModTime()
+		mtKeyTotal, mtDelKeyCount, mtPdKeyCount = p.stMutable.getKeyStats()
 	}
 
 	if stNum > 1 {
@@ -473,10 +516,6 @@ func (p *page) maybeScheduleFlush(flushSize uint64, isForce bool) bool {
 					p.bp.index, p.pn, utils.FmtUnixTime(mtLifeTime), utils.FmtUnixTime(mtModTime), mtSize, flushSize)
 			}
 		}
-	}
-
-	if isFlush {
-		p.setFlushState(pageFlushStateSendTask)
 	}
 
 	return isFlush

@@ -17,15 +17,15 @@ package statemachine
 import (
 	"sync"
 	"sync/atomic"
-	"time"
 
-	"github.com/zuoyebang/bitalosdb/internal/consts"
+	"github.com/zuoyebang/bitalosdb/v2/internal/consts"
 )
 
 type DbStateMachine struct {
-	TaskLock            sync.Mutex // compact-bithash｜checkpoint
-	BitowerHighPriority [consts.DefaultBitowerNum]atomic.Bool
-	BitowerWrite        [consts.DefaultBitowerNum]sync.Mutex // mem-flush｜bitpage-flush/split ｜compact-bitable｜checkpoint
+	TaskLock             sync.RWMutex                            // [vm-flush | mem-flush | bitpage-flush/split | checkpoint]
+	KKVWrite             [consts.MemIndexShardNum + 1]sync.Mutex // [mem-flush | bitpage-flush/split]
+	MemTableHighPriority [consts.MemIndexShardNum + 1]atomic.Bool
+	VmTableHighPriority  [consts.MemIndexShardNum]atomic.Bool
 
 	bitpage struct {
 		flushCount atomic.Uint64
@@ -37,32 +37,69 @@ func NewDbStateMachine() *DbStateMachine {
 	return &DbStateMachine{}
 }
 
-func (s *DbStateMachine) LockDbWrite() {
-	for i := range s.BitowerWrite {
-		s.BitowerWrite[i].Lock()
-	}
-}
-
-func (s *DbStateMachine) UnlockDbWrite() {
-	for i := range s.BitowerWrite {
-		s.BitowerWrite[i].Unlock()
-	}
-}
-
-func (s *DbStateMachine) LockBitowerWrite(i int) {
-	s.BitowerWrite[i].Lock()
-}
-
-func (s *DbStateMachine) UnlockBitowerWrite(i int) {
-	s.BitowerWrite[i].Unlock()
-}
-
 func (s *DbStateMachine) LockTask() {
 	s.TaskLock.Lock()
 }
 
 func (s *DbStateMachine) UnlockTask() {
 	s.TaskLock.Unlock()
+}
+
+func (s *DbStateMachine) RLockTask() {
+	s.TaskLock.RLock()
+}
+
+func (s *DbStateMachine) RUnlockTask() {
+	s.TaskLock.RUnlock()
+}
+
+func (s *DbStateMachine) LockDbKKVWrite() {
+	for i := range s.KKVWrite {
+		s.KKVWrite[i].Lock()
+	}
+}
+
+func (s *DbStateMachine) UnlockDbKKVWrite() {
+	for i := range s.KKVWrite {
+		s.KKVWrite[i].Unlock()
+	}
+}
+
+func (s *DbStateMachine) LockKKVWrite(i int) {
+	index := consts.KKVSlotToShard(i)
+	s.KKVWrite[index].Lock()
+}
+
+func (s *DbStateMachine) UnlockKKVWrite(i int) {
+	index := consts.KKVSlotToShard(i)
+	s.KKVWrite[index].Unlock()
+}
+
+func (s *DbStateMachine) LockKKVMemTableWrite(i int) {
+	s.KKVWrite[i].Lock()
+}
+
+func (s *DbStateMachine) UnlockKKVMemTableWrite(i int) {
+	s.KKVWrite[i].Unlock()
+}
+
+func (s *DbStateMachine) SetMemTableHighPriority(i int, v bool) {
+	s.MemTableHighPriority[i].Store(v)
+}
+
+func (s *DbStateMachine) WaitMemTableHighPriority(i int) bool {
+	index := consts.KKVSlotToShard(i)
+	return s.MemTableHighPriority[index].Load()
+}
+
+func (s *DbStateMachine) SetVmTableHighPriority(i int, v bool) {
+	index := consts.KVSlotToShard(i)
+	s.VmTableHighPriority[index].Store(v)
+}
+
+func (s *DbStateMachine) WaitVmTableHighPriority(i int) bool {
+	index := consts.KVSlotToShard(i)
+	return s.VmTableHighPriority[index].Load()
 }
 
 func (s *DbStateMachine) AddBitpageFlushCount() {
@@ -79,20 +116,4 @@ func (s *DbStateMachine) AddBitpageSplitCount() {
 
 func (s *DbStateMachine) GetBitpageSplitCount() uint64 {
 	return s.bitpage.splitCount.Load()
-}
-
-func (s *DbStateMachine) SetDbHighPriority(v bool) {
-	for i := range s.BitowerHighPriority {
-		s.BitowerHighPriority[i].Store(v)
-	}
-}
-
-func (s *DbStateMachine) SetBitowerHighPriority(i int, v bool) {
-	s.BitowerHighPriority[i].Store(v)
-}
-
-func (s *DbStateMachine) WaitBitowerHighPriority(i int) {
-	for s.BitowerHighPriority[i].Load() {
-		time.Sleep(1 * time.Second)
-	}
 }

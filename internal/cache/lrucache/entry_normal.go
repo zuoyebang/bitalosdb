@@ -22,8 +22,8 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/zuoyebang/bitalosdb/internal/invariants"
-	"github.com/zuoyebang/bitalosdb/internal/manual"
+	"github.com/zuoyebang/bitalosdb/v2/internal/invariants"
+	"github.com/zuoyebang/bitalosdb/v2/internal/manual"
 )
 
 const (

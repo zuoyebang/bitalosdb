@@ -16,6 +16,7 @@ package bdb
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -25,12 +26,11 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/bitask"
-	"github.com/zuoyebang/bitalosdb/internal/consts"
-	"github.com/zuoyebang/bitalosdb/internal/errors"
-	"github.com/zuoyebang/bitalosdb/internal/options"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/bitask"
+	"github.com/zuoyebang/bitalosdb/v2/internal/consts"
+	"github.com/zuoyebang/bitalosdb/v2/internal/options"
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
 )
 
 const maxMmapStep = 1 << 30
@@ -69,9 +69,9 @@ type DB struct {
 	Mlock          bool
 
 	ops struct {
-		writeAt           func(b []byte, off int64) (n int, err error)
-		pushTaskCB        func(task *bitask.BitpageTaskData)
-		checkPageSplitted func(pn uint32) bool
+		writeAt        func(b []byte, off int64) (n int, err error)
+		pushTaskCB     func(task *bitask.BitpageTaskData)
+		checkPageFreed func(pn uint32) bool
 	}
 
 	path            string
@@ -135,10 +135,10 @@ func Open(path string, opts *options.BdbOptions) (*DB, error) {
 	db.logger = opts.Logger
 	db.cmp = opts.Cmp
 	db.index = opts.Index
+	db.AllocSize = opts.AllocSize
 
 	db.MaxBatchSize = DefaultMaxBatchSize
 	db.MaxBatchDelay = DefaultMaxBatchDelay
-	db.AllocSize = consts.BdbAllocSize
 
 	flag := os.O_RDWR
 	if opts.ReadOnly {
@@ -165,7 +165,7 @@ func Open(path string, opts *options.BdbOptions) (*DB, error) {
 
 	db.ops.writeAt = db.file.WriteAt
 	db.ops.pushTaskCB = opts.BitpageTaskPushFunc
-	db.ops.checkPageSplitted = opts.CheckPageSplitted
+	db.ops.checkPageFreed = opts.CheckPageFreed
 
 	if db.pageSize = opts.PageSize; db.pageSize == 0 {
 		db.pageSize = defaultPageSize
@@ -234,7 +234,6 @@ func (db *DB) loadFreelist() {
 			db.freelist.readIDs(db.freepages())
 		} else {
 			dbMeta := db.meta()
-			db.logger.Infof("[BDB %d] load freelist [version:%d] [txid:%d]", db.index, dbMeta.version, dbMeta.txid)
 			if dbMeta.version == versionFreelistBitmap {
 				db.freelist.readFromBitmap(db.page(dbMeta.freelist))
 			} else {
@@ -275,7 +274,7 @@ func (db *DB) mmap(minsz int) error {
 
 	info, err := db.file.Stat()
 	if err != nil {
-		return errors.Wrapf(err, "mmap stat err")
+		return err
 	} else if int(info.Size()) < db.pageSize*2 {
 		return errors.New("file size too small")
 	}
@@ -328,7 +327,7 @@ func (db *DB) mmap(minsz int) error {
 
 func (db *DB) munmap() error {
 	if err := munmap(db); err != nil {
-		return errors.Wrapf(err, "unmap err")
+		return err
 	}
 	return nil
 }
@@ -363,14 +362,14 @@ func (db *DB) mmapSize(size int) (int, error) {
 
 func (db *DB) munlock(fileSize int) error {
 	if err := munlock(db, fileSize); err != nil {
-		return errors.Wrapf(err, "munlock err")
+		return err
 	}
 	return nil
 }
 
 func (db *DB) mlock(fileSize int) error {
 	if err := mlock(db, fileSize); err != nil {
-		return errors.Wrapf(err, "mlock err")
+		return err
 	}
 	return nil
 }
@@ -455,12 +454,12 @@ func (db *DB) close() error {
 	if db.file != nil {
 		if !db.readOnly {
 			if err := funlock(db); err != nil {
-				return errors.Wrapf(err, "funlock err")
+				return err
 			}
 		}
 
 		if err := db.file.Close(); err != nil {
-			return errors.Wrapf(err, "file close err")
+			return err
 		}
 		db.file = nil
 	}
@@ -540,7 +539,7 @@ func (db *DB) freePages() {
 	}
 	m3 = db.freelist.releaseRange(minid, txid(0xFFFFFFFFFFFFFFFF))
 
-	dstCache := make(map[pgid]struct{}, 0)
+	dstCache := make(map[pgid]struct{})
 	mergePgids := func(pids pgids) {
 		if len(pids) == 0 {
 			return
@@ -576,7 +575,7 @@ func (db *DB) freePagesForTask(pids pgids) {
 		}
 
 		pn := utils.BytesToUint32(v)
-		if db.ops.checkPageSplitted(pn) {
+		if db.ops.checkPageFreed(pn) {
 			if _, exist := pnsDup[pn]; !exist {
 				pns = append(pns, pn)
 				pnsDup[pn] = struct{}{}
@@ -656,13 +655,6 @@ func (db *DB) removeTx(tx *Tx) {
 	db.stats.OpenTxN = n
 	db.stats.TxStats.add(&tx.stats)
 	db.statlock.Unlock()
-}
-
-func (db *DB) NewIter(rtx *ReadTx) *BdbIterator {
-	return &BdbIterator{
-		iter: rtx.Bucket().Cursor(),
-		rTx:  rtx,
-	}
 }
 
 func (db *DB) Update(fn func(*Tx) error) error {
@@ -886,7 +878,7 @@ func (db *DB) allocate(txid txid, count int) (*page, bool, error) {
 	var minsz = int((p.id+pgid(count))+1) * db.pageSize
 	if minsz >= db.datasz {
 		if err := db.mmap(minsz); err != nil {
-			return nil, false, errors.Wrapf(err, "mmap allocate err")
+			return nil, false, err
 		}
 	}
 
@@ -909,15 +901,15 @@ func (db *DB) grow(sz int) error {
 	if !db.NoGrowSync && !db.readOnly {
 		if runtime.GOOS != "windows" {
 			if err := db.file.Truncate(int64(sz)); err != nil {
-				return errors.Wrapf(err, "file resize err")
+				return err
 			}
 		}
 		if err := db.file.Sync(); err != nil {
-			return errors.Wrapf(err, "file sync err")
+			return err
 		}
 		if db.Mlock {
 			if err := db.mrelock(db.filesz, sz); err != nil {
-				return errors.Wrapf(err, "mlock/munlock err")
+				return err
 			}
 		}
 	}

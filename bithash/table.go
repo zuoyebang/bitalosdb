@@ -19,8 +19,11 @@ import (
 	"encoding/binary"
 	"io"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/errors"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/buffer"
+	"github.com/zuoyebang/bitalosdb/v2/internal/consts"
+	"github.com/zuoyebang/bitalosdb/v2/internal/errors"
+	"github.com/zuoyebang/bitalosdb/v2/internal/vfs"
 )
 
 const (
@@ -153,7 +156,7 @@ func (b *Bithash) initTables() error {
 		if !isRebuildTable {
 			_, err = b.openTable(fn, f, filename)
 			if err != nil {
-				b.logger.Warnf("bithash initTables openTable fail file:%s err:%s", base.GetFilePathBase(filename), err)
+				b.logger.Errorf("bithash initTables openTable fail file:%s err:%s", base.GetFilePathBase(filename), err)
 				if err == ErrBhNewReaderFail {
 					isRebuildTable = true
 				} else if err = f.Close(); err != nil {
@@ -302,18 +305,19 @@ func (b *Bithash) NewTableIter(fileNum FileNum) (*TableIterator, error) {
 	}
 
 	iter := &TableIterator{
-		reader:  f,
+		reader:  buffer.NewReaderSize(f, consts.BithashBufioReaderBufSize),
+		file:    f,
 		fileNum: fileNum,
-		offset:  0,
-		kvBuf:   make([]byte, 1024),
+		kvBuf:   make([]byte, 0, 1024),
 	}
+
 	return iter, nil
 }
 
 type TableIterator struct {
-	reader    ReadableFile
+	reader    *buffer.Reader
+	file      vfs.File
 	fileNum   FileNum
-	offset    int64
 	br        block2Reader
 	header    [recordHeaderSize]byte
 	kvBuf     []byte
@@ -346,7 +350,7 @@ func (i *TableIterator) Close() error {
 	if i.reader == nil {
 		return nil
 	}
-	i.err = i.reader.Close()
+	i.err = i.file.Close()
 	i.reader = nil
 	return i.err
 }
@@ -356,7 +360,7 @@ func (i *TableIterator) findEntry() (key *InternalKey, value []byte, fileNum Fil
 		return
 	}
 
-	n, err := i.reader.ReadAt(i.header[:], i.offset)
+	n, err := i.reader.Read(i.header[:])
 	if err != nil || n != recordHeaderSize {
 		if n != recordHeaderSize {
 			err = errors.Errorf("TableIterator findEntry read header n not eq exp(%d) act(%d)", recordHeaderSize, n)
@@ -376,7 +380,7 @@ func (i *TableIterator) findEntry() (key *InternalKey, value []byte, fileNum Fil
 		i.kvBuf = make([]byte, 0, kvLen*2)
 	}
 	i.kvBuf = i.kvBuf[:kvLen]
-	n, err = i.reader.ReadAt(i.kvBuf, i.offset+recordHeaderSize)
+	n, err = i.reader.Read(i.kvBuf)
 	if err != nil || n != int(kvLen) {
 		if n != int(kvLen) {
 			err = errors.Errorf("TableIterator findEntry read kv n not eq exp(%d) act(%d)", kvLen, n)
@@ -387,7 +391,5 @@ func (i *TableIterator) findEntry() (key *InternalKey, value []byte, fileNum Fil
 	}
 
 	i.iterKey, i.iterValue = i.br.readKV(i.kvBuf, ikeySize, valueSize)
-	i.offset += int64(recordHeaderSize + kvLen)
-
 	return i.iterKey, i.iterValue, fn
 }

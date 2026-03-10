@@ -22,9 +22,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/zuoyebang/bitalosdb/bitree/bdb"
-	"github.com/zuoyebang/bitalosdb/internal/errors"
-	"github.com/zuoyebang/bitalosdb/internal/options"
+	"github.com/zuoyebang/bitalosdb/v2/bitree/bdb"
+	"github.com/zuoyebang/bitalosdb/v2/internal/errors"
+	"github.com/zuoyebang/bitalosdb/v2/internal/options"
 )
 
 func TestSimulate_1op_1p(t *testing.T)     { testSimulate(t, nil, 1, 1, 1) }

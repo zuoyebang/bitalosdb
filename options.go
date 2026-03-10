@@ -15,82 +15,53 @@
 package bitalosdb
 
 import (
-	"time"
-
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/compress"
-	"github.com/zuoyebang/bitalosdb/internal/consts"
-	"github.com/zuoyebang/bitalosdb/internal/options"
-	"github.com/zuoyebang/bitalosdb/internal/vfs"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/compress"
+	"github.com/zuoyebang/bitalosdb/v2/internal/consts"
+	"github.com/zuoyebang/bitalosdb/v2/internal/options"
+	"github.com/zuoyebang/bitalosdb/v2/internal/vfs"
 )
 
 type IterOptions = options.IterOptions
 
-var IterAll = IterOptions{IsAll: true}
-
-type WriteOptions struct {
-	Sync bool
-}
-
-var Sync = &WriteOptions{Sync: true}
-
-var NoSync = &WriteOptions{Sync: false}
-
-func (o *WriteOptions) GetSync() bool {
-	return o == nil || o.Sync
-}
-
 type CompactEnv struct {
-	StartHour     int
-	EndHour       int
-	DeletePercent float64
-	BitreeMaxSize int64
-	Interval      int
+	StartHour            int
+	EndHour              int
+	BithashDeletePercent float64
+	VtGCThreshold        float64
 }
-
-type BitableOptions = options.BitableOptions
 
 type Options struct {
 	BytesPerSync                   int
 	Comparer                       *Comparer
-	DisableWAL                     bool
-	EventListener                  EventListener
-	MemTableSize                   int
-	MemTableStopWritesThreshold    int
-	WALBytesPerSync                int
-	WALDir                         string
-	WALMinSyncInterval             func() time.Duration
 	FS                             vfs.FS
 	Logger                         Logger
-	Id                             int
+	CompressionType                int
 	Verbose                        bool
 	LogTag                         string
-	DataType                       string
-	CompressionType                int
 	DeleteFileInternal             int
-	UseBithash                     bool
-	UseBitable                     bool
-	BitableOpts                    *options.BitableOptions
-	AutoCompact                    bool
-	CompactInfo                    CompactEnv
-	CacheSize                      int64
-	CacheType                      int
-	CacheShards                    int
-	CacheHashSize                  int
-	UseMapIndex                    bool
-	UsePrefixCompress              bool
-	UseBlockCompress               bool
-	BlockCacheSize                 int64
-	FlushReporter                  func(int)
-	KeyHashFunc                    func([]byte) int
-	KvCheckExpireFunc              func(int, []byte, []byte) bool
-	KvTimestampFunc                func([]byte, uint8) (bool, uint64)
+	DisableStoreKey                bool
+	VectorTableCount               uint16
+	VectorTableHashSize            uint32
+	VmTableSize                    int
+	VmTableStopWritesThreshold     int
+	MemTableSize                   int
+	MemTableStopWritesThreshold    int
+	GetNowTimestamp                func() uint64
 	IOWriteLoadThresholdFunc       func() bool
-	KeyPrefixDeleteFunc            func([]byte) uint64
+	MaxKeySize                     int
+	MaxSubKeySize                  int
+	MaxValueSize                   int
 	FlushPrefixDeleteKeyMultiplier int
 	FlushFileLifetime              int
 	BitpageFlushSize               uint64
 	BitpageSplitSize               uint64
+	BitpageDisableMiniVi           bool
+	BitpageTaskWorkerNum           int
+	BithashTableSize               int
+	AutoCompact                    bool
+	CompactInfo                    CompactEnv
+	FlushReporter                  func(int)
 
 	private struct {
 		logInit  bool
@@ -100,45 +71,22 @@ type Options struct {
 
 func (o *Options) ensureOptionsPool(optspool *options.OptionsPool) *options.OptionsPool {
 	if optspool == nil {
-		optspool = options.InitDefaultsOptionsPool()
+		optspool = options.InitOptionsPool()
 	}
 
-	optspool.BaseOptions.Id = o.Id
 	optspool.BaseOptions.FS = o.FS
 	optspool.BaseOptions.Cmp = o.Comparer.Compare
 	optspool.BaseOptions.Logger = o.Logger
-	optspool.BaseOptions.BytesPerSync = o.BytesPerSync
 	optspool.BaseOptions.Compressor = compress.SetCompressor(o.CompressionType)
-	optspool.BaseOptions.UseBithash = o.UseBithash
-	optspool.BaseOptions.UseBitable = o.UseBitable
-	optspool.BaseOptions.UseMapIndex = o.UseMapIndex
-	optspool.BaseOptions.UsePrefixCompress = o.UsePrefixCompress
-	optspool.BaseOptions.UseBlockCompress = o.UseBlockCompress
-	optspool.BaseOptions.KeyHashFunc = o.KeyHashFunc
+	optspool.BaseOptions.BytesPerSync = o.BytesPerSync
 	optspool.BaseOptions.FlushPrefixDeleteKeyMultiplier = o.FlushPrefixDeleteKeyMultiplier
 	optspool.BaseOptions.FlushFileLifetime = o.FlushFileLifetime
-	optspool.BaseOptions.BitpageBlockCacheSize = consts.BitpageDefaultBlockCacheSize
 	optspool.BaseOptions.BitpageFlushSize = o.BitpageFlushSize
 	optspool.BaseOptions.BitpageSplitSize = o.BitpageSplitSize
-	if o.UseBlockCompress && o.BlockCacheSize > 0 {
-		bitpageBlockCacheSize := o.BlockCacheSize / int64(consts.DefaultBitowerNum)
-		if bitpageBlockCacheSize > consts.BitpageDefaultBlockCacheSize {
-			optspool.BaseOptions.BitpageBlockCacheSize = bitpageBlockCacheSize
-		}
-	}
-	if o.KvCheckExpireFunc != nil {
-		optspool.BaseOptions.KvCheckExpireFunc = o.KvCheckExpireFunc
-	}
-	if o.KvTimestampFunc != nil {
-		optspool.BaseOptions.KvTimestampFunc = o.KvTimestampFunc
-	}
-	if o.KeyPrefixDeleteFunc != nil {
-		optspool.BaseOptions.KeyPrefixDeleteFunc = o.KeyPrefixDeleteFunc
-	}
-
-	if o.UseBitable {
-		o.BitableOpts.Options = optspool.BaseOptions
-		optspool.BitableOptions = o.BitableOpts
+	optspool.BaseOptions.BitpageDisableMiniVi = o.BitpageDisableMiniVi
+	optspool.BithashOptions.TableMaxSize = o.BithashTableSize
+	if o.GetNowTimestamp != nil {
+		optspool.BaseOptions.GetNowTimestamp = o.GetNowTimestamp
 	}
 
 	dflOpts := &base.DFLOption{
@@ -159,52 +107,81 @@ func (o *Options) EnsureDefaults() *Options {
 	if o == nil {
 		o = &Options{}
 	}
+
 	if o.BytesPerSync <= 0 {
-		o.BytesPerSync = consts.DefaultBytesPerSync
+		o.BytesPerSync = consts.BytesPerSyncDefault
 	}
 	if o.Comparer == nil {
 		o.Comparer = DefaultComparer
 	}
-	if o.MemTableSize <= 0 {
-		o.MemTableSize = consts.DefaultMemTableSize
-	}
-	o.MemTableSize = o.MemTableSize / consts.DefaultBitowerNum
-	if o.MemTableStopWritesThreshold <= 0 {
-		o.MemTableStopWritesThreshold = consts.DefaultMemTableStopWritesThreshold
-	}
-	if o.CacheSize <= 0 {
-		o.CacheSize = 0
-	} else if o.CacheSize > 0 {
-		if o.CacheSize < consts.DefaultCacheSize {
-			o.CacheSize = consts.DefaultCacheSize
-		}
-		if o.CacheType <= 0 || o.CacheType > consts.CacheTypeLfu {
-			o.CacheType = consts.CacheTypeLfu
-		}
-		if o.CacheType == consts.CacheTypeLfu {
-			o.CacheShards = consts.DefaultLfuCacheShards
-		} else {
-			o.CacheShards = consts.DefaultLruCacheShards
-			if o.CacheHashSize <= 0 {
-				o.CacheHashSize = consts.DefaultLruCacheHashSize
-			}
-		}
-	}
 	if o.DeleteFileInternal == 0 {
 		o.DeleteFileInternal = consts.DeletionFileInterval
-	}
-	if !o.private.logInit {
-		o.Logger = base.NewLogger(o.Logger, o.LogTag)
-		if o.Verbose {
-			o.EventListener = MakeLoggingEventListener(o.Logger)
-		} else {
-			o.EventListener.EnsureDefaults(o.Logger)
-		}
-		o.private.logInit = true
 	}
 	if o.FS == nil {
 		o.FS = vfs.Default
 	}
+
+	if o.VmTableSize <= 0 {
+		o.VmTableSize = consts.VmTableSize
+	}
+	o.VmTableSize = o.VmTableSize / consts.MemIndexShardNum
+	if o.VmTableStopWritesThreshold <= 0 {
+		o.VmTableStopWritesThreshold = consts.VmTableStopWritesThreshold
+	}
+	if o.MemTableSize <= 0 {
+		o.MemTableSize = consts.MemTableSize
+	}
+	o.MemTableSize = o.MemTableSize / consts.MemIndexShardNum
+	if o.MemTableStopWritesThreshold <= 0 {
+		o.MemTableStopWritesThreshold = consts.MemTableStopWritesThreshold
+	}
+
+	if o.VectorTableHashSize <= 0 {
+		o.VectorTableHashSize = consts.VectorTableHashSizeDefault
+	}
+	if o.VectorTableCount == 0 {
+		o.VectorTableCount = consts.VectorTableCountDefault
+	} else if o.VectorTableCount > consts.VectorTableMaxShards {
+		o.VectorTableCount = consts.VectorTableMaxShards
+	}
+	//o.VectorTableHashSize = o.VectorTableHashSize / uint32(o.VectorTableCount)
+
+	if o.IOWriteLoadThresholdFunc == nil {
+		o.IOWriteLoadThresholdFunc = options.DefaultIOWriteLoadThresholdFunc
+	}
+
+	if o.MaxKeySize == 0 {
+		o.MaxKeySize = consts.MaxKeySizeDefault
+	}
+	if o.MaxSubKeySize == 0 {
+		o.MaxSubKeySize = consts.MaxSubKeySizeDefault
+	}
+	if o.MaxValueSize == 0 {
+		o.MaxValueSize = consts.MaxValueSizeDefault
+	}
+
+	if o.FlushPrefixDeleteKeyMultiplier == 0 {
+		o.FlushPrefixDeleteKeyMultiplier = consts.DefaultFlushPrefixDeleteKeyMultiplier
+	}
+	if o.FlushFileLifetime == 0 {
+		o.FlushFileLifetime = consts.DefaultFlushFileLifetime
+	}
+
+	if o.BithashTableSize == 0 {
+		o.BithashTableSize = consts.BithashTableSize
+	}
+
+	if o.BitpageFlushSize == 0 {
+		o.BitpageFlushSize = consts.BitpageFlushSize
+	}
+	if o.BitpageSplitSize == 0 {
+		o.BitpageSplitSize = consts.BitpageSplitSize
+	}
+
+	if o.BitpageTaskWorkerNum <= 0 || o.BitpageTaskWorkerNum > consts.MemIndexShardNum {
+		o.BitpageTaskWorkerNum = consts.BitpageTaskWorkerNum
+	}
+
 	if o.CompactInfo.StartHour <= 0 {
 		o.CompactInfo.StartHour = 0
 	}
@@ -217,38 +194,16 @@ func (o *Options) EnsureDefaults() *Options {
 	if o.CompactInfo.EndHour > 23 {
 		o.CompactInfo.EndHour = 23
 	}
-	if o.CompactInfo.DeletePercent < 0 || o.CompactInfo.DeletePercent >= 1 {
-		o.CompactInfo.DeletePercent = consts.DefaultDeletePercent
+	if o.CompactInfo.BithashDeletePercent < 0 || o.CompactInfo.BithashDeletePercent >= 1 {
+		o.CompactInfo.BithashDeletePercent = consts.BithashDeletePercentDefault
 	}
-	if o.CompactInfo.BitreeMaxSize <= 0 {
-		o.CompactInfo.BitreeMaxSize = consts.UseBitableBitreeMaxSize
+	if o.CompactInfo.VtGCThreshold < 0 || o.CompactInfo.VtGCThreshold >= 1 {
+		o.CompactInfo.VtGCThreshold = consts.VectorTableGCThresholdDefault
 	}
-	if o.CompactInfo.Interval == 0 {
-		o.CompactInfo.Interval = consts.DefaultCompactInterval
-	}
-	if o.CompactInfo.Interval < consts.MinCompactInterval {
-		o.CompactInfo.Interval = consts.MinCompactInterval
-	}
-	if o.UseBitable {
-		o.BitableOpts = options.DefaultBitableOptions
-	}
-	if o.IOWriteLoadThresholdFunc == nil {
-		o.IOWriteLoadThresholdFunc = options.DefaultIOWriteLoadThresholdFunc
-	}
-	if o.KeyHashFunc == nil {
-		o.KeyHashFunc = options.DefaultKeyHashFunc
-	}
-	if o.FlushPrefixDeleteKeyMultiplier == 0 {
-		o.FlushPrefixDeleteKeyMultiplier = consts.DefaultFlushPrefixDeleteKeyMultiplier
-	}
-	if o.FlushFileLifetime == 0 {
-		o.FlushFileLifetime = consts.DefaultFlushFileLifetime
-	}
-	if o.BitpageFlushSize == 0 {
-		o.BitpageFlushSize = consts.BitpageDefaultFlushSize
-	}
-	if o.BitpageSplitSize == 0 {
-		o.BitpageSplitSize = consts.BitpageDefaultSplitSize
+
+	if !o.private.logInit {
+		o.Logger = base.NewLogger(o.Logger, o.LogTag)
+		o.private.logInit = true
 	}
 
 	return o

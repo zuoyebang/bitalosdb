@@ -19,33 +19,34 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
 )
 
-type MemFlushTaskData struct {
+type MemTableFlushTaskData struct {
 	Index      int
 	NeedReport bool
+	IsForce    bool
 }
 
-type MemFlushTaskOptions struct {
+type MemTableFlushTaskOptions struct {
 	Size   int
-	DoFunc func(*MemFlushTaskData)
+	DoFunc func(*MemTableFlushTaskData)
 	Logger base.Logger
 	TaskWg *sync.WaitGroup
 }
 
-type MemFlushTask struct {
+type MemTableFlushTask struct {
 	taskWg     *sync.WaitGroup
-	recvCh     chan *MemFlushTaskData
+	recvCh     chan *MemTableFlushTaskData
 	taskCount  uint64
 	closed     atomic.Bool
 	logger     base.Logger
-	doTaskFunc func(*MemFlushTaskData)
+	doTaskFunc func(*MemTableFlushTaskData)
 }
 
-func NewMemFlushTask(opts *MemFlushTaskOptions) *MemFlushTask {
-	task := &MemFlushTask{
-		recvCh:     make(chan *MemFlushTaskData, opts.Size),
+func NewMemTableFlushTask(opts *MemTableFlushTaskOptions) *MemTableFlushTask {
+	task := &MemTableFlushTask{
+		recvCh:     make(chan *MemTableFlushTaskData, opts.Size),
 		doTaskFunc: opts.DoFunc,
 		logger:     opts.Logger,
 		taskWg:     opts.TaskWg,
@@ -54,7 +55,7 @@ func NewMemFlushTask(opts *MemFlushTaskOptions) *MemFlushTask {
 	return task
 }
 
-func (t *MemFlushTask) Run() {
+func (t *MemTableFlushTask) Run() {
 	t.taskWg.Add(1)
 	go func() {
 		defer func() {
@@ -89,20 +90,20 @@ func (t *MemFlushTask) Run() {
 	t.logger.Infof("memtable flush task background running...")
 }
 
-func (t *MemFlushTask) isClosed() bool {
-	return t.closed.Load() == true
+func (t *MemTableFlushTask) isClosed() bool {
+	return t.closed.Load()
 }
 
-func (t *MemFlushTask) Count() uint64 {
+func (t *MemTableFlushTask) Count() uint64 {
 	return t.taskCount
 }
 
-func (t *MemFlushTask) Close() {
+func (t *MemTableFlushTask) Close() {
 	t.closed.Store(true)
 	t.recvCh <- nil
 }
 
-func (t *MemFlushTask) PushTask(task *MemFlushTaskData) {
+func (t *MemTableFlushTask) PushTask(task *MemTableFlushTaskData) {
 	if !t.isClosed() {
 		t.taskCount++
 		t.recvCh <- task

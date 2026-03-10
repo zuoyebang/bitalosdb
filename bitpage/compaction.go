@@ -15,101 +15,108 @@
 package bitpage
 
 import (
+	"bytes"
 	"fmt"
 	"runtime/debug"
 	"strings"
 	"time"
 
-	"github.com/zuoyebang/bitalosdb/internal/bitask"
-	"github.com/zuoyebang/bitalosdb/internal/consts"
-	"github.com/zuoyebang/bitalosdb/internal/errors"
-	"github.com/zuoyebang/bitalosdb/internal/humanize"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/bitask"
+	"github.com/zuoyebang/bitalosdb/v2/internal/errors"
+	"github.com/zuoyebang/bitalosdb/v2/internal/humanize"
+	"github.com/zuoyebang/bitalosdb/v2/internal/iterator"
+	"github.com/zuoyebang/bitalosdb/v2/internal/kkv"
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
 )
 
-func (p *page) makeNewArrayTable() (*arrayTable, *flushableEntry, error) {
-	fn := p.bp.meta.getNextAtFileNum(p.pn)
-	path := p.bp.makeFilePath(fileTypeArrayTable, p.pn, fn)
-	return p.newArrayTable(path, fn, false)
+func (p *page) isNeedSplitPage(size uint64) bool {
+	return size >= p.bp.opts.BitpageSplitSize
 }
 
-func (p *page) flush(sentinel []byte, logTag string) (err error) {
+func (p *page) makeVectorArrayTable() (*vectorArrayTable, *flushableEntry, error) {
+	fn := p.bp.meta.getNextAtFileNum(p.pn)
+	path := p.bp.makeFilePath(fileTypeVectorArrayTable, p.pn, fn)
+	return p.newVectorArrayTable(path, fn, false)
+}
+
+func (p *page) newMergingIter(flushing flushableList) *iterator.KKVMergingIter {
+	var its []InternalKKVIterator
+	for i := range flushing {
+		iter := flushing[i].newIter(nil)
+		if iter != nil {
+			its = append(its, iter)
+		}
+	}
+	return iterator.NewKKVMergingIter(p.bp.opts.Logger, its...)
+}
+
+func (p *page) flush(sentinel []byte) (err error) {
+	logTag := fmt.Sprintf("[BITPAGE %d] flush page(%d)", p.bp.index, p.pn)
+
 	defer func() {
 		if r := recover(); r != nil {
 			err = errors.Errorf("%s flush panic err:%v stack:%s", logTag, r, string(debug.Stack()))
 		}
 	}()
 
-	var n int
-	var flushing flushableList
-	var minUnflushedStFileNum FileNum
-	var oldSize uint64
-
-	prepareFlushing := func() error {
-		if err := p.makeMutableForWrite(false); err != nil {
-			return errors.Wrapf(err, "bitpage: makeMutableForWrite fail")
-		}
-
-		n = len(p.mu.stQueue) - 1
-		minUnflushedStFileNum = p.mu.stQueue[n].fileNum
-
-		for i := 0; i < n; i++ {
-			logNum := p.mu.stQueue[i].fileNum
-			if logNum >= minUnflushedStFileNum {
-				return errors.New("bitpage: flush next file number is unset")
-			}
-			flushing = append(flushing, p.mu.stQueue[i])
-			oldSize += p.mu.stQueue[i].inuseBytes()
-		}
-
-		if n > 0 && p.mu.arrtable != nil {
-			flushing = append(flushing, p.mu.arrtable)
-			oldSize += p.mu.arrtable.inuseBytes()
-		}
-		return nil
-	}
-
-	p.bp.opts.Logger.Infof("%s flush start", logTag)
 	p.setFlushState(pageFlushStateStart)
 
-	if err = prepareFlushing(); err != nil {
-		return errors.Wrapf(err, "bitpage: %s flush prepareFlushing fail", logTag)
+	var oldSize uint64
+	stNum := len(p.stQueue)
+	flushing := make(flushableList, 0, stNum+1)
+	for i := 0; i < stNum; i++ {
+		flushing = append(flushing, p.stQueue[i])
+		oldSize += p.stQueue[i].dataBytes()
+	}
+
+	if len(flushing) > 0 && p.arrtable != nil {
+		flushing = append(flushing, p.arrtable)
+		oldSize += p.arrtable.dataBytes()
 	}
 
 	if len(flushing) == 0 {
 		return nil
 	}
 
+	immediateSplit := p.preFlush(flushing, oldSize, logTag)
+	if immediateSplit {
+		p.setFlushState(pageFlushStateFinish)
+		p.pushSplitTask(sentinel)
+		p.bp.opts.Logger.Infof("%s push immediate split task", logTag)
+		return nil
+	}
+
+	if err = p.makeMutableForWrite(); err != nil {
+		return err
+	}
+
 	var atEntry *flushableEntry
 	atEntry, err = p.runFlush(flushing, oldSize, logTag)
 	if err != nil {
-		return errors.Wrapf(err, "bitpage: %s flush fail", logTag)
+		return err
 	}
 
-	p.bp.meta.setMinUnflushedStFileNum(p.pn, minUnflushedStFileNum)
-	p.mu.stQueue = p.mu.stQueue[n:]
-	p.mu.arrtable = atEntry
+	n := len(p.stQueue) - 1
+	p.bp.meta.setMinUnflushedStFileNum(p.pn, p.stQueue[n].fileNum)
+	p.stQueue = p.stQueue[n:]
+	p.arrtable = atEntry
 	p.updateReadState()
+	p.setFlushState(pageFlushStateFinish)
+
 	for i := range flushing {
 		flushing[i].setObsolete()
 		flushing[i].readerUnref()
 	}
 
-	p.setFlushState(pageFlushStateFinish)
-
 	if atEntry == nil {
-		return nil
+		return base.ErrPageFlushEmpty
 	}
 
 	if sentinel != nil && p.bp.pageNoneSplit(p.pn) {
 		newSize := atEntry.inuseBytes()
-		if newSize > p.bp.opts.BitpageSplitSize {
-			p.bp.opts.BitpageTaskPushFunc(&bitask.BitpageTaskData{
-				Index:    p.bp.index,
-				Event:    bitask.BitpageEventSplit,
-				Pn:       uint32(p.pn),
-				Sentinel: sentinel,
-			})
-			p.bp.meta.setSplitState(p.pn, pageSplitStateSendTask)
+		if p.isNeedSplitPage(newSize) {
+			p.pushSplitTask(sentinel)
 			p.bp.opts.Logger.Infof("%s push split task", logTag)
 		}
 	}
@@ -117,125 +124,157 @@ func (p *page) flush(sentinel []byte, logTag string) (err error) {
 	return nil
 }
 
-func (p *page) runFlush(flushing flushableList, oldSize uint64, logTag string) (atEntry *flushableEntry, retErr error) {
-	var iiter internalIterator
-	var at *arrayTable
-	var keyPrefixDeleteKind, prefixDeleteNum int
-	var lastPrefixDelete uint64
-
-	startTime := time.Now()
-	if len(flushing) == 1 {
-		iiter = flushing[0].newIter(&iterCompactOpts)
-	} else {
-		its := make([]internalIterator, 0, len(flushing))
-		for i := range flushing {
-			its = append(its, flushing[i].newIter(&iterCompactOpts))
-		}
-		iiter = newMergingIter(p.bp.opts.Logger, p.bp.opts.Cmp, its...)
+func (p *page) preFlush(flushing flushableList, oldSize uint64, logTag string) bool {
+	if !p.isNeedSplitPage(oldSize) {
+		return false
 	}
 
-	iter := newCompactionIter(p.bp, iiter)
-	defer func() {
-		if iter != nil {
-			_ = iter.Close()
+	var keyPrefixDeleteKind, estimateSize int
+	var lastPrefixDelete []byte
+
+	checkKeyPrefixDelete := func(ik *InternalKKVKey, iv []byte) bool {
+		if lastPrefixDelete == nil {
+			return false
 		}
 
+		if bytes.Equal(lastPrefixDelete, ik.Version) {
+			p.bp.deleteBithashKey(iv)
+			return true
+		} else {
+			lastPrefixDelete = nil
+			return false
+		}
+	}
+
+	iter := &compactionIter{
+		bp:        p.bp,
+		iter:      p.newMergingIter(flushing),
+		isPreCalc: true,
+	}
+	defer iter.Close()
+
+	startTime := time.Now()
+	for iterKey, iterValue := iter.First(); iterKey != nil; iterKey, iterValue = iter.Next() {
+		switch iterKey.Kind() {
+		case internalKeyKindSet:
+			if checkKeyPrefixDelete(iterKey, iterValue) {
+				continue
+			}
+			estimateSize += estimateVatItemSize(iterKey.DataType, iterKey.SubKey, iterValue)
+		case internalKeyKindPrefixDelete:
+			lastPrefixDelete = iterKey.Version
+			keyPrefixDeleteKind++
+		}
+	}
+
+	isNeedSplit := p.isNeedSplitPage(uint64(estimateSize))
+	p.bp.opts.Logger.Infof("%s preFlush isNeedSplit:%v oldSize:%s estimateSize:%s cost:%.3fs",
+		logTag,
+		isNeedSplit,
+		utils.FmtSize(int64(oldSize)),
+		utils.FmtSize(int64(estimateSize)),
+		time.Since(startTime).Seconds())
+
+	return isNeedSplit
+}
+
+func (p *page) runFlush(
+	flushing flushableList, oldSize uint64, logTag string,
+) (atEntry *flushableEntry, retErr error) {
+	var at *vectorArrayTable
+	var keyPrefixDeleteKind, prefixDeleteNum, deleteNum int
+	var lastKeyVersion uint64
+
+	iter := &compactionIter{
+		bp:   p.bp,
+		iter: p.newMergingIter(flushing),
+	}
+	defer iter.Close()
+
+	defer func() {
 		if retErr != nil && atEntry != nil {
 			atEntry.setObsolete()
 			atEntry.readerUnref()
 		}
 	}()
 
-	deleteBitableKey := func(ik *internalKey) {
-		if !p.bp.opts.UseBitable {
-			return
-		}
-
-		if err := p.bp.opts.BitableDeleteCB(ik.UserKey); err != nil {
-			p.bp.opts.Logger.Errorf("%s BitableDeleteCB fail key:%s err:%s", logTag, ik.String(), err)
-		}
-	}
-
-	checkKeyPrefixDelete := func(ik *internalKey, iv []byte) bool {
-		if lastPrefixDelete == 0 {
+	checkKeyPrefixDelete := func(keyVersion uint64, iv []byte) bool {
+		if lastKeyVersion == 0 {
 			return false
-		}
-
-		keyPrefixDelete := p.bp.opts.KeyPrefixDeleteFunc(ik.UserKey)
-		if lastPrefixDelete == keyPrefixDelete {
+		} else if keyVersion == lastKeyVersion {
 			p.bp.deleteBithashKey(iv)
-			deleteBitableKey(ik)
 			return true
 		} else {
-			lastPrefixDelete = 0
+			lastKeyVersion = 0
 			return false
 		}
 	}
 
-	p.bp.opts.Logger.Infof("%s runFlush start flushing(%d)", logTag, len(flushing))
+	p.bp.opts.Logger.Infof("%s runFlush start", logTag)
 
+	startTime := time.Now()
+	iterNum := 0
 	for iterKey, iterValue := iter.First(); iterKey != nil; iterKey, iterValue = iter.Next() {
+		iterNum++
 		switch iterKey.Kind() {
 		case internalKeyKindSet:
-			if checkKeyPrefixDelete(iterKey, iterValue) {
+			if checkKeyPrefixDelete(kkv.DecodeKeyVersion(iterKey.Version), iterValue) {
 				prefixDeleteNum++
 				continue
 			}
-
-			if p.bp.opts.CheckExpireCB(iterKey.UserKey, iterValue) {
-				deleteBitableKey(iterKey)
-			} else {
-				if at == nil {
-					at, atEntry, retErr = p.makeNewArrayTable()
-					if retErr != nil {
-						return nil, retErr
-					}
-				}
-				if _, err := at.writeItem(iterKey.UserKey, iterValue); err != nil {
-					p.bp.opts.Logger.Errorf("%s writeItem fail err:%s", logTag, err)
+			if at == nil {
+				at, atEntry, retErr = p.makeVectorArrayTable()
+				if retErr != nil {
+					return nil, retErr
 				}
 			}
-
-		case internalKeyKindDelete:
-			deleteBitableKey(iterKey)
-
+			if _, err := at.writeItemByHash(iterKey, iterValue); err != nil {
+				p.bp.opts.Logger.Errorf("%s writeItem fail err:%s", logTag, err)
+			}
 		case internalKeyKindPrefixDelete:
-			lastPrefixDelete = p.bp.opts.KeyPrefixDeleteFunc(iterKey.UserKey)
+			lastKeyVersion = kkv.DecodeKeyVersion(iterKey.Version)
 			keyPrefixDeleteKind++
+		case internalKeyKindDelete:
+			deleteNum++
 		}
 	}
 
 	if at == nil {
-		p.bp.opts.Logger.Infof("%s runFlush finish atNil oldSize(%s) newSize(0) in %.3fs",
-			logTag, humanize.Uint64(oldSize), time.Since(startTime).Seconds())
+		p.bp.opts.Logger.Infof("%s runFlush finish atNil oldSize:%s iterNum:%d deleteNum:%d pdKindKeys:%d pdDelKeys:%d in %.3fs",
+			logTag, utils.FmtSize(int64(oldSize)),
+			iterNum,
+			deleteNum,
+			keyPrefixDeleteKind,
+			prefixDeleteNum,
+			time.Since(startTime).Seconds())
 		return nil, nil
 	}
 
-	if retErr = at.writeFinish(); retErr != nil {
+	if retErr = at.writeFinish(iter.Key()); retErr != nil {
 		return nil, retErr
 	}
 
 	p.bp.meta.setNextArrayTableFileNum(p.pn)
 
-	duration := time.Since(startTime)
-	p.bp.opts.Logger.Infof("%s runFlush finish flushed(%s) at(%s) atVersion(%d) atSize(%s) keys(%d) keysPdKind(%d) pdNum(%d), in %.3fs",
+	p.bp.opts.Logger.Infof("%s runFlush finish at:%s flushNum:%d oldSize:%s newSize:%s iterNum:%d deleteNum:%d pdKindKeys:%d pdDelKeys:%d %s in %.3fs",
 		logTag,
-		humanize.Uint64(oldSize),
-		at.filename,
-		at.getVersion(),
-		humanize.Uint64(uint64(at.size)),
-		at.itemCount(),
+		at.getId(),
+		len(flushing),
+		utils.FmtSize(int64(oldSize)),
+		utils.FmtSize(int64(at.inuseBytes())),
+		iterNum,
+		deleteNum,
 		keyPrefixDeleteKind,
 		prefixDeleteNum,
-		duration.Seconds(),
-	)
+		at.headerInfo(),
+		time.Since(startTime).Seconds())
 
 	return atEntry, nil
 }
 
-func (p *page) split(logTag string, pages []*page) (retErr error) {
+func (p *page) split(logTag string, pages []*page) error {
 	splitNum := len(pages)
-	p.bp.opts.Logger.Infof("%s start splitNum:%d", logTag, splitNum)
+	p.bp.opts.Logger.Infof("%s start splitNum:%d splitSize:%s", logTag, splitNum, humanize.Uint64(p.bp.opts.BitpageSplitSize))
 	startTime := time.Now()
 	defer func() {
 		if r := recover(); r != any(nil) {
@@ -245,49 +284,49 @@ func (p *page) split(logTag string, pages []*page) (retErr error) {
 
 	var flushing flushableList
 	var oldSize uint64
+	var current int
+	var writeBytes uint64
+	var atCurrent *vectorArrayTable
+	var lastPage, finished bool
 
-	flushing = append(flushing, p.mu.stQueue...)
-	flushing = append(flushing, p.mu.arrtable)
-
-	its := make([]internalIterator, 0, len(flushing))
+	flushing = append(flushing, p.stQueue...)
+	if p.arrtable != nil {
+		flushing = append(flushing, p.arrtable)
+	}
 	for i := range flushing {
-		its = append(its, flushing[i].newIter(&iterCompactOpts))
 		oldSize += flushing[i].dataBytes()
 	}
-	iiter := newMergingIter(p.bp.opts.Logger, p.bp.opts.Cmp, its...)
-	iter := newCompactionIter(p.bp, iiter)
+
+	iiter := p.newMergingIter(flushing)
+	iter := &compactionIter{
+		bp:   p.bp,
+		iter: iiter,
+	}
 	defer iter.Close()
 
-	var ats [consts.BitpageSplitNum]*arrayTable
-	var atEntrys [consts.BitpageSplitNum]*flushableEntry
+	ats := make([]*vectorArrayTable, splitNum)
+	atEntrys := make([]*flushableEntry, splitNum)
 
 	for i := 0; i < splitNum; i++ {
-		at, atEntry, err := pages[i].makeNewArrayTable()
-		if retErr != nil {
-			retErr = err
-			return
+		at, atEntry, err := pages[i].makeVectorArrayTable()
+		if err != nil {
+			return err
 		}
 
 		ats[i] = at
 		atEntrys[i] = atEntry
 	}
 
-	var current int
-	var wn uint32
-	var writeBytes uint64
-	var atCurrent *arrayTable
-	var lastPage, finished bool
-
 	atCurrent = ats[current]
 	splitSize := oldSize / uint64(splitNum)
-	for key, val := iter.First(); key != nil; key, val = iter.Next() {
-		if key.Kind() != internalKeyKindSet {
+	for iterKey, iterValue := iter.First(); iterKey != nil; iterKey, iterValue = iter.Next() {
+		if iterKey.Kind() != internalKeyKindSet {
 			continue
 		}
 
-		wn, retErr = atCurrent.writeItem(key.UserKey, val)
-		if retErr != nil {
-			return
+		wn, err := atCurrent.writeItemByHash(iterKey, iterValue)
+		if err != nil {
+			return err
 		}
 
 		if finished {
@@ -300,8 +339,8 @@ func (p *page) split(logTag string, pages []*page) (retErr error) {
 			if current == splitNum {
 				lastPage = true
 			} else {
-				if retErr = atCurrent.writeFinish(); retErr != nil {
-					return
+				if err = atCurrent.writeFinish(iter.Key()); err != nil {
+					return err
 				}
 				atCurrent = ats[current]
 				writeBytes = 0
@@ -310,32 +349,41 @@ func (p *page) split(logTag string, pages []*page) (retErr error) {
 		}
 	}
 	if !finished {
-		if retErr = atCurrent.writeFinish(); retErr != nil {
-			return
+		if err := atCurrent.writeFinish(iter.Key()); err != nil {
+			return err
 		}
 	}
 
 	var newPageInfo strings.Builder
 	for i := 0; i < splitNum; i++ {
 		if !ats[i].empty() {
-			pages[i].maxKey = ats[i].getMaxKey()
-			pages[i].mu.arrtable = atEntrys[i]
+			pages[i].maxKey = utils.CloneBytes(ats[i].getMaxKey())
+			pages[i].arrtable = atEntrys[i]
 			pages[i].updateReadState()
-			newPageInfo.WriteString(fmt.Sprintf("%s ", humanize.Uint64(ats[i].inuseBytes())))
+			newPageInfo.WriteString(fmt.Sprintf("%s ", utils.FmtSize(int64(ats[i].dataBytes()))))
 		} else {
-			p.bp.opts.Logger.Infof("%s free empty page pn:%d", logTag, pages[i].pn)
 			_ = p.bp.FreePage(pages[i].pn, false)
 			pages[i] = nil
 		}
 	}
 
-	p.bp.opts.Logger.Infof("%s finish splitSize(%s) oldSize(%s) newSize(%s), cost:%.3fs",
+	p.bp.opts.Logger.Infof("%s finish flushing(%d) splitSize(%s) oldSize(%s) newSize(%s), cost:%.3fs",
 		logTag,
-		humanize.Uint64(splitSize),
-		humanize.Uint64(oldSize),
+		len(flushing),
+		utils.FmtSize(int64(splitSize)),
+		utils.FmtSize(int64(oldSize)),
 		newPageInfo.String(),
 		time.Since(startTime).Seconds(),
 	)
+	return nil
+}
 
-	return
+func (p *page) pushSplitTask(sentinel []byte) {
+	p.bp.opts.BitpageTaskPushFunc(&bitask.BitpageTaskData{
+		Index:    p.bp.index,
+		Event:    bitask.BitpageEventSplit,
+		Pn:       uint32(p.pn),
+		Sentinel: sentinel,
+	})
+	p.bp.meta.setPageState(p.pn, pageStateSplitSendTask)
 }

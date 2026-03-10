@@ -19,7 +19,7 @@ import (
 	"encoding/binary"
 	"sync"
 
-	base2 "github.com/zuoyebang/bitalosdb/internal/cache/lfucache/internal/base"
+	base2 "github.com/zuoyebang/bitalosdb/v2/internal/cache/lfucache/internal/base"
 )
 
 type splice struct {
@@ -79,31 +79,6 @@ func (it *Iterator) SeekGE(key []byte) (*base2.InternalKey, []byte) {
 	}
 
 	return &it.key, it.value()
-}
-
-func (it *Iterator) SeekPrefixGE(
-	prefix, key []byte, trySeekUsingNext bool,
-) (*base2.InternalKey, []byte) {
-	if trySeekUsingNext {
-		if it.nd == it.list.tail {
-			return nil, nil
-		}
-		less := bytes.Compare(it.key.UserKey, key) < 0
-
-		const numNexts = 5
-		for i := 0; less && i < numNexts; i++ {
-			k, _ := it.Next()
-			if k == nil {
-
-				return nil, nil
-			}
-			less = bytes.Compare(it.key.UserKey, key) < 0
-		}
-		if !less {
-			return &it.key, it.value()
-		}
-	}
-	return it.SeekGE(key)
 }
 
 func (it *Iterator) SeekLT(key []byte) (*base2.InternalKey, []byte) {

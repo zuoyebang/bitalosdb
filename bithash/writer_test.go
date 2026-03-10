@@ -21,9 +21,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/unsafe2"
 	"github.com/stretchr/testify/require"
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/unsafe2"
 )
 
 func TestFixedWidthWrite(t *testing.T) {
@@ -82,7 +82,7 @@ func TestBlockFile(t *testing.T) {
 	var block []byte
 	w := &blockWriter{}
 	for k, e := range strings.Split(strings.TrimSpace("a:1,b:2,c:3,d:4"), ",") {
-		w.add(makeIkey(e), []byte(fmt.Sprintf("hello"+strconv.Itoa(k+100))))
+		w.add(makeIkey(e), []byte("hello"+strconv.Itoa(k+100)))
 	}
 	block = w.finish()
 	n, err := f0.Write(block)
@@ -122,7 +122,7 @@ func TestWriteReadBlock(t *testing.T) {
 	}
 	w := &blockWriter{}
 	for k, e := range strings.Split(strings.TrimSpace("a:1,b:2,c:3,d:4"), ",") {
-		w.add(makeIkey(e), []byte(fmt.Sprintf("hello"+strconv.Itoa(k+100))))
+		w.add(makeIkey(e), []byte("hello"+strconv.Itoa(k+100)))
 	}
 	iter, err := newBlockIter(bytes.Compare, w.finish())
 	if err != nil {
@@ -149,9 +149,9 @@ func TestByteReuse(t *testing.T) {
 
 func TestWriterUpdateIndex(t *testing.T) {
 	w := &Writer{
-		indexHash:    make(map[uint32]*hashHandle, 1<<18),
-		indexArray:   make([]hashHandle, 1<<18),
-		conflictKeys: make(map[string]BlockHandle, 10),
+		indexHash:    make(map[uint32]*hashHandle, 1<<8),
+		indexArray:   make([]hashHandle, 1<<8),
+		conflictKeys: make(map[string]BlockHandle),
 	}
 
 	key1 := []byte("key1")

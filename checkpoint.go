@@ -17,127 +17,106 @@ package bitalosdb
 import (
 	"os"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/os2"
-	"github.com/zuoyebang/bitalosdb/internal/vfs"
+	"github.com/zuoyebang/bitalosdb/v2/internal/os2"
+	"github.com/zuoyebang/bitalosdb/v2/internal/vfs"
 )
 
-type checkpointOptions struct {
-	flushWAL bool
-}
+const (
+	ckpStatusNone = iota
+	ckpStatusSnapshoStart
+	ckpStatusSnapshotEnd
+)
 
-type CheckpointOption func(*checkpointOptions)
-
-func WithFlushedWAL() CheckpointOption {
-	return func(opt *checkpointOptions) {
-		opt.flushWAL = true
+func (d *DB) checkpointSyncedSwitchVmVt() {
+	for _, shard := range d.vmShard {
+		shard.switchVmVtable()
 	}
 }
 
-func mkdirAllAndSyncParents(fs vfs.FS, destDir string) (vfs.File, error) {
-	var parentPaths []string
-	if err := fs.MkdirAll(destDir, 0755); err != nil {
-		return nil, err
-	}
-
-	foundExistingAncestor := false
-	for parentPath := fs.PathDir(destDir); parentPath != "."; parentPath = fs.PathDir(parentPath) {
-		parentPaths = append(parentPaths, parentPath)
-		if os2.IsExist(parentPath) {
-			foundExistingAncestor = true
-			break
-		}
-	}
-
-	if !foundExistingAncestor {
-		parentPaths = append(parentPaths, "")
-	}
-
-	for _, parentPath := range parentPaths {
-		parentDir, err := fs.OpenDir(parentPath)
-		if err != nil {
-			return nil, err
-		}
-		err = parentDir.Sync()
-		if err != nil {
-			_ = parentDir.Close()
-			return nil, err
-		}
-		err = parentDir.Close()
-		if err != nil {
-			return nil, err
-		}
-	}
-	return fs.OpenDir(destDir)
-}
-
-func (d *DB) Checkpoint(destDir string, opts ...CheckpointOption) (ckErr error) {
-	d.opts.Logger.Info("checkpoint start to run")
+func (d *DB) Checkpoint(dstDir string) (func(), error) {
+	d.opts.Logger.Infof("checkpoint start to run dstDir:%s", dstDir)
 	defer d.opts.Logger.Cost("checkpoint done")()
 
-	opt := &checkpointOptions{}
-	for _, fn := range opts {
-		fn(opt)
+	if os2.IsExist(dstDir) {
+		return nil, os.ErrExist
 	}
-
-	if os2.IsExist(destDir) {
-		return os.ErrExist
-	}
-
-	isSync := opt.flushWAL && !d.opts.DisableWAL
 
 	fs := vfs.WithSyncingFS(d.opts.FS, vfs.SyncingFileOptions{
 		BytesPerSync: d.opts.BytesPerSync,
 	})
 
 	var dir vfs.File
+	var err error
 	defer func() {
 		if dir != nil {
 			_ = dir.Close()
 		}
-		if ckErr != nil {
-			paths, _ := fs.List(destDir)
-			for _, path := range paths {
-				_ = fs.Remove(path)
+		if err != nil {
+			paths, _ := fs.List(dstDir)
+			for i := range paths {
+				_ = fs.Remove(paths[i])
 			}
-			_ = fs.Remove(destDir)
+			_ = fs.Remove(dstDir)
 		}
 	}()
-	dir, ckErr = mkdirAllAndSyncParents(fs, destDir)
-	if ckErr != nil {
-		return ckErr
+	dir, err = vfs.MkdirAllAndSyncParents(fs, dstDir)
+	if err != nil {
+		return nil, err
 	}
 
-	srcPath := base.MakeFilepath(fs, d.dirname, fileTypeMeta, 0)
-	destFile := fs.PathJoin(destDir, fs.PathBase(srcPath))
-	if ckErr = vfs.Copy(fs, srcPath, destFile); ckErr != nil {
-		return ckErr
+	if err = d.Flush(false); err != nil {
+		return nil, err
 	}
 
-	for i := range d.bitowers {
-		if ckErr = d.bitowers[i].checkpoint(fs, destDir, isSync); ckErr != nil {
-			return ckErr
+	d.ckpStatus.Store(ckpStatusSnapshoStart)
+	d.dbState.LockTask()
+	d.dbState.LockDbKKVWrite()
+	d.opts.Logger.Info("bitalosdb checkpoint LockTask")
+
+	closer := func() {
+		d.dbState.UnlockTask()
+		d.ckpStatus.Store(ckpStatusNone)
+		d.opts.Logger.Info("bitalosdb checkpoint UnlockTask")
+		d.checkpointSyncedSwitchVmVt()
+	}
+
+	defer func() {
+		d.dbState.UnlockDbKKVWrite()
+		d.ckpStatus.Store(ckpStatusSnapshotEnd)
+		if err != nil {
+			d.dbState.UnlockTask()
+			d.ckpStatus.Store(ckpStatusNone)
+			closer = nil
+		}
+	}()
+
+	srcMetaPath := d.meta.path
+	if err = vfs.Copy(fs, srcMetaPath, fs.PathJoin(dstDir, fs.PathBase(srcMetaPath))); err != nil {
+		return nil, err
+	}
+
+	for i := range d.bituples {
+		bt := d.getBitupleSafe(i)
+		if bt != nil {
+			if err = bt.checkpoint(fs, dstDir); err != nil {
+				return nil, err
+			}
 		}
 	}
 
-	if ckErr = dir.Sync(); ckErr != nil {
-		return ckErr
+	if err = dir.Sync(); err != nil {
+		return nil, err
 	}
-	ckErr = dir.Close()
-	dir = nil
-	return ckErr
+	if err = dir.Close(); err != nil {
+		return nil, err
+	}
+	return closer, nil
 }
 
-func (d *DB) SetCheckpointLock(lock bool) {
-	if lock {
-		d.LockTask()
-		d.dbState.LockDbWrite()
-	} else {
-		d.dbState.UnlockDbWrite()
-		d.UnlockTask()
-	}
+func (d *DB) IsCheckpointHighPriority() bool {
+	return d.ckpStatus.Load() == ckpStatusSnapshoStart
 }
 
-func (d *DB) SetCheckpointHighPriority(v bool) {
-	d.dbState.SetDbHighPriority(v)
+func (d *DB) IsCheckpointSyncing() bool {
+	return d.ckpStatus.Load() != ckpStatusNone
 }

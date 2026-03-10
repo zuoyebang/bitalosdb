@@ -19,7 +19,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zuoyebang/bitalosdb/internal/vfs"
+	"github.com/zuoyebang/bitalosdb/v2/internal/vfs"
 )
 
 type FileNum uint32

@@ -21,20 +21,16 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/fastrand"
-
-	"github.com/zuoyebang/bitalosdb/internal/errors"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/fastrand"
 )
 
 const (
-	maxHeight   = 20
+	maxHeight   = 19
 	maxNodeSize = int(unsafe.Sizeof(node{}))
 	linksSize   = int(unsafe.Sizeof(links{}))
 	pValue      = 1 / math.E
 )
-
-var ErrRecordExists = errors.New("record with this key already exists")
 
 type Skiplist struct {
 	arena   *Arena
@@ -118,7 +114,7 @@ func (s *Skiplist) Add(key base.InternalKey, value []byte) error {
 
 func (s *Skiplist) addInternal(key base.InternalKey, value []byte, ins *Inserter) error {
 	if s.findSplice(key, ins) {
-		return ErrRecordExists
+		return base.ErrRecordExists
 	}
 
 	if s.testing {
@@ -175,7 +171,7 @@ func (s *Skiplist) addInternal(key base.InternalKey, value []byte, ins *Inserter
 					panic("how can another thread have inserted a node at a non-base level?")
 				}
 
-				return ErrRecordExists
+				return base.ErrRecordExists
 			}
 			invalidateSplice = true
 		}
@@ -358,9 +354,7 @@ func (s *Skiplist) findSplice(key base.InternalKey, ins *Inserter) (found bool) 
 	return
 }
 
-func (s *Skiplist) findSpliceForLevel(
-	key base.InternalKey, level int, start *node,
-) (prev, next *node, found bool) {
+func (s *Skiplist) findSpliceForLevel(key base.InternalKey, level int, start *node) (prev, next *node, found bool) {
 	prev = start
 
 	for {

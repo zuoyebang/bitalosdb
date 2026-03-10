@@ -16,7 +16,9 @@ package manual
 
 // #include <stdlib.h>
 import "C"
-import "unsafe"
+import (
+	"unsafe"
+)
 
 // The go:linkname directives provides backdoor access to private functions in
 // the runtime. Below we're accessing the throw function.

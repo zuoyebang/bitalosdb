@@ -17,35 +17,11 @@ package bitpage
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"testing"
 
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
 	"github.com/stretchr/testify/require"
-	"github.com/zuoyebang/bitalosdb/internal/utils"
 )
-
-var testPath = filepath.Join(os.TempDir(), "testdata")
-
-func testNewTable() *table {
-	opts := &tableOptions{
-		openType:     tableWriteMmap,
-		initMmapSize: 10 << 20,
-	}
-	tbl, err := openTable(testPath, opts)
-	if err != nil {
-		panic(any(err))
-	}
-
-	return tbl
-}
-
-func testCloseTable(t *table) error {
-	if err := t.close(); err != nil {
-		return err
-	}
-	os.Remove(testPath)
-	return nil
-}
 
 func TestTable_ExpandSize(t *testing.T) {
 	defer os.Remove(testPath)
@@ -78,30 +54,30 @@ func TestTable_WriteRead(t *testing.T) {
 		off, e1 := tbl.alloc(uint32(size))
 		offs = append(offs, off)
 		require.NoError(t, e1)
-		wn, e2 := tbl.writeAt(val, off)
+		wn, e2 := tbl.writeAtOffset(val, off)
 		require.NoError(t, e2)
 		require.Equal(t, size, wn)
 	}
 
 	for i, offset := range offs {
 		size := i + 1
-		v := tbl.getBytes(offset, uint32(size))
+		v := tbl.GetBytes(offset, uint32(size))
 		require.Equal(t, vals[i], v)
 	}
 
-	tblOffset := tbl.offset.Load()
+	tblOffset := tbl.Size()
 
-	require.NoError(t, tbl.close())
+	require.NoError(t, tbl.Close())
 
 	tbl1 := testNewTable()
-	require.Equal(t, tblOffset, tbl1.offset.Load())
-	fmt.Println(tbl1.offset.Load())
+	require.Equal(t, tblOffset, tbl1.Size())
+	fmt.Println(tbl1.Size())
 	for i, offset := range offs {
 		size := i + 1
-		v := tbl1.getBytes(offset, uint32(size))
+		v := tbl1.GetBytes(offset, uint32(size))
 		require.Equal(t, vals[i], v)
 	}
-	require.NoError(t, tbl1.close())
+	require.NoError(t, tbl1.Close())
 	_ = os.Remove(testPath)
 }
 
@@ -113,36 +89,52 @@ func TestTable_Expand(t *testing.T) {
 	for i := 1; i <= 40*1024; i++ {
 		off, e1 := tbl.alloc(1024)
 		require.NoError(t, e1)
-		wn, e2 := tbl.writeAt(val, off)
+		wn, e2 := tbl.writeAtOffset(val, off)
 		require.NoError(t, e2)
 		require.Equal(t, 1024, wn)
-		require.Equal(t, val, tbl.getBytes(off, 1024))
+		require.Equal(t, val, tbl.GetBytes(off, 1024))
 	}
-	offset := tableDataOffset
+	offset := TblDataOffset
 	for i := 1; i <= 40*1024; i++ {
-		v := tbl.getBytes(uint32(offset), 1024)
+		v := tbl.GetBytes(uint32(offset), 1024)
 		require.Equal(t, val, v)
 		offset += 1024
 	}
-	tblOffset := tbl.offset.Load()
-	require.Equal(t, int64(tbl.filesz), tbl.fileStatSize())
+	tblOffset := tbl.Size()
+	require.Equal(t, int64(tbl.filesz), tbl.getFileSize())
 	require.Equal(t, 67108864, tbl.filesz)
-	require.Equal(t, uint32(41943044), tbl.offset.Load())
+	require.Equal(t, uint32(41943044), tbl.Size())
 	require.Equal(t, 67108864, tbl.datasz)
-	require.NoError(t, tbl.close())
+	require.NoError(t, tbl.Close())
 
 	tbl1 := testNewTable()
-	require.Equal(t, tblOffset, tbl1.offset.Load())
-	offset = tableDataOffset
+	require.Equal(t, tblOffset, tbl1.Size())
+	offset = TblDataOffset
 	for i := 1; i <= 40*1024; i++ {
-		v := tbl1.getBytes(uint32(offset), 1024)
+		v := tbl1.GetBytes(uint32(offset), 1024)
 		require.Equal(t, val, v)
 		offset += 1024
 	}
-	require.Equal(t, int64(tbl1.filesz), tbl1.fileStatSize())
+	require.Equal(t, int64(tbl1.filesz), tbl1.getFileSize())
 	require.Equal(t, 67108864, tbl1.filesz)
-	require.Equal(t, uint32(41943044), tbl1.offset.Load())
+	require.Equal(t, uint32(41943044), tbl1.Size())
 	require.Equal(t, 67108864, tbl1.datasz)
-	require.NoError(t, tbl1.close())
+	require.NoError(t, tbl1.Close())
 	_ = os.Remove(testPath)
+}
+
+func TestTable_KeySize(t *testing.T) {
+	buf := make([]byte, TblItemHeaderSize)
+	var valueSize uint16
+	for i := uint32(1); i < uint32(10000); i++ {
+		if i%2 == 0 {
+			valueSize = 0
+		} else {
+			valueSize = 10
+		}
+		encodeKeySize(buf, i, valueSize)
+		kz, voff := decodeKeySize(buf)
+		require.Equal(t, i, kz)
+		require.Equal(t, valueSize, voff)
+	}
 }

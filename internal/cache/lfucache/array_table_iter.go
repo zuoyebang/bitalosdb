@@ -19,7 +19,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/zuoyebang/bitalosdb/internal/cache/lfucache/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/cache/lfucache/internal/base"
 )
 
 var _ base.InternalIterator = (*arrayTableFlushIterator)(nil)
@@ -79,12 +79,6 @@ func (ai *arrayTableIterator) SeekLT(seek []byte) (*internalKey, []byte) {
 	panic("arrayTableIterator: SeekLT unimplemented")
 }
 
-func (ai *arrayTableIterator) SeekPrefixGE(
-	prefix, key []byte, trySeekUsingNext bool,
-) (ikey *internalKey, value []byte) {
-	panic("arrayTableIterator: SeekPrefixGE unimplemented")
-}
-
 func (ai *arrayTableIterator) SetBounds(lower, upper []byte) {
 }
 
@@ -126,12 +120,6 @@ func (ai *arrayTableFlushIterator) Prev() (*internalKey, []byte) {
 
 func (ai *arrayTableFlushIterator) SeekLT(seek []byte) (*internalKey, []byte) {
 	panic("arrayTableFlushIterator: SeekLT unimplemented")
-}
-
-func (ai *arrayTableFlushIterator) SeekPrefixGE(
-	prefix, key []byte, trySeekUsingNext bool,
-) (ikey *internalKey, value []byte) {
-	panic("arrayTableFlushIterator: SeekPrefixGE unimplemented")
 }
 
 func (ai *arrayTableFlushIterator) String() string {

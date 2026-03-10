@@ -18,9 +18,9 @@ import (
 	"bytes"
 	"encoding/binary"
 
-	"github.com/zuoyebang/bitalosdb/internal/cache"
-	"github.com/zuoyebang/bitalosdb/internal/hash"
-	"github.com/zuoyebang/bitalosdb/internal/options"
+	"github.com/zuoyebang/bitalosdb/v2/internal/cache"
+	"github.com/zuoyebang/bitalosdb/v2/internal/hash"
+	"github.com/zuoyebang/bitalosdb/v2/internal/options"
 )
 
 var _ cache.ICache = (*LruCache)(nil)
@@ -58,6 +58,7 @@ func (lrc *LruCache) ExistAndDelete(key []byte, _ uint32) error {
 
 func (lrc *LruCache) Get(key []byte, _ uint32) ([]byte, func(), bool) {
 	keyID, keyHash := hash.MD5Uint64(key)
+
 	hd := lrc.getShardByHashId(keyHash).Get(keyID, keyHash)
 	value := hd.Get()
 	if value == nil {

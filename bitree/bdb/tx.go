@@ -23,7 +23,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/zuoyebang/bitalosdb/internal/errors"
+	"github.com/zuoyebang/bitalosdb/v2/internal/errors"
 )
 
 type txid uint64
@@ -340,7 +340,7 @@ func (tx *Tx) WriteTo(w io.Writer) (n int64, err error) {
 	nn, err := w.Write(buf)
 	n += int64(nn)
 	if err != nil {
-		return n, errors.Wrapf(err, "meta 0 copy err")
+		return n, errors.Errorf("meta 0 copy err %s", err)
 	}
 
 	page.id = 1
@@ -349,11 +349,11 @@ func (tx *Tx) WriteTo(w io.Writer) (n int64, err error) {
 	nn, err = w.Write(buf)
 	n += int64(nn)
 	if err != nil {
-		return n, errors.Wrapf(err, "meta 1 copy err")
+		return n, errors.Errorf("meta 1 copy err %s", err)
 	}
 
-	if _, err := f.Seek(int64(tx.db.pageSize*2), io.SeekStart); err != nil {
-		return n, errors.Wrapf(err, "seek err")
+	if _, err = f.Seek(int64(tx.db.pageSize*2), io.SeekStart); err != nil {
+		return n, err
 	}
 
 	wn, err := io.CopyN(w, f, tx.Size()-int64(tx.db.pageSize*2))

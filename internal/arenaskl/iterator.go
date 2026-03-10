@@ -18,8 +18,11 @@ import (
 	"encoding/binary"
 	"sync"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/kkv"
 )
+
+type InternalKKVKey = kkv.InternalKey
 
 type splice struct {
 	prev *node
@@ -39,7 +42,7 @@ type Iterator struct {
 	upper []byte
 }
 
-var _ base.InternalIterator = (*Iterator)(nil)
+var _ kkv.InternalIterator = (*Iterator)(nil)
 
 var iterPool = sync.Pool{
 	New: func() interface{} {
@@ -64,7 +67,12 @@ func (it *Iterator) Error() error {
 	return nil
 }
 
-func (it *Iterator) SeekGE(key []byte) (*base.InternalKey, []byte) {
+func (it *Iterator) getKKVKey(key base.InternalKey) *InternalKKVKey {
+	kkvKey := kkv.MakeInternalKey(key)
+	return &kkvKey
+}
+
+func (it *Iterator) SeekGE(key []byte) (*InternalKKVKey, []byte) {
 	_, it.nd, _ = it.list.seekForBaseSplice(key)
 	if it.nd == it.list.tail {
 		return nil, nil
@@ -74,33 +82,10 @@ func (it *Iterator) SeekGE(key []byte) (*base.InternalKey, []byte) {
 		it.nd = it.list.tail
 		return nil, nil
 	}
-	return &it.key, it.value()
+	return it.getKKVKey(it.key), it.value()
 }
 
-func (it *Iterator) SeekPrefixGE(
-	prefix, key []byte, trySeekUsingNext bool,
-) (*base.InternalKey, []byte) {
-	if trySeekUsingNext {
-		if it.nd == it.list.tail {
-			return nil, nil
-		}
-		less := it.list.cmp(it.key.UserKey, key) < 0
-		const numNexts = 5
-		for i := 0; less && i < numNexts; i++ {
-			k, _ := it.Next()
-			if k == nil {
-				return nil, nil
-			}
-			less = it.list.cmp(it.key.UserKey, key) < 0
-		}
-		if !less {
-			return &it.key, it.value()
-		}
-	}
-	return it.SeekGE(key)
-}
-
-func (it *Iterator) SeekLT(key []byte) (*base.InternalKey, []byte) {
+func (it *Iterator) SeekLT(key []byte) (*InternalKKVKey, []byte) {
 	it.nd, _, _ = it.list.seekForBaseSplice(key)
 	if it.nd == it.list.head {
 		return nil, nil
@@ -110,10 +95,10 @@ func (it *Iterator) SeekLT(key []byte) (*base.InternalKey, []byte) {
 		it.nd = it.list.head
 		return nil, nil
 	}
-	return &it.key, it.value()
+	return it.getKKVKey(it.key), it.value()
 }
 
-func (it *Iterator) First() (*base.InternalKey, []byte) {
+func (it *Iterator) First() (*InternalKKVKey, []byte) {
 	it.nd = it.list.getNext(it.list.head, 0)
 	if it.nd == it.list.tail {
 		return nil, nil
@@ -123,10 +108,10 @@ func (it *Iterator) First() (*base.InternalKey, []byte) {
 		it.nd = it.list.tail
 		return nil, nil
 	}
-	return &it.key, it.value()
+	return it.getKKVKey(it.key), it.value()
 }
 
-func (it *Iterator) Last() (*base.InternalKey, []byte) {
+func (it *Iterator) Last() (*InternalKKVKey, []byte) {
 	it.nd = it.list.getPrev(it.list.tail, 0)
 	if it.nd == it.list.head {
 		return nil, nil
@@ -136,10 +121,10 @@ func (it *Iterator) Last() (*base.InternalKey, []byte) {
 		it.nd = it.list.head
 		return nil, nil
 	}
-	return &it.key, it.value()
+	return it.getKKVKey(it.key), it.value()
 }
 
-func (it *Iterator) Next() (*base.InternalKey, []byte) {
+func (it *Iterator) Next() (*InternalKKVKey, []byte) {
 	it.nd = it.list.getSkipNext(it.nd)
 	if it.nd == it.list.tail {
 		return nil, nil
@@ -149,10 +134,10 @@ func (it *Iterator) Next() (*base.InternalKey, []byte) {
 		it.nd = it.list.tail
 		return nil, nil
 	}
-	return &it.key, it.value()
+	return it.getKKVKey(it.key), it.value()
 }
 
-func (it *Iterator) Prev() (*base.InternalKey, []byte) {
+func (it *Iterator) Prev() (*InternalKKVKey, []byte) {
 	it.nd = it.list.getSkipPrev(it.nd)
 	if it.nd == it.list.head {
 		return nil, nil
@@ -162,7 +147,7 @@ func (it *Iterator) Prev() (*base.InternalKey, []byte) {
 		it.nd = it.list.head
 		return nil, nil
 	}
-	return &it.key, it.value()
+	return it.getKKVKey(it.key), it.value()
 }
 
 func (it *Iterator) value() []byte {

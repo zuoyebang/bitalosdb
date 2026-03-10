@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"math/rand"
 	"os"
 	"runtime"
 	"strconv"
@@ -28,12 +27,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/compress"
+	"github.com/zuoyebang/bitalosdb/v2/internal/hash"
+	"github.com/zuoyebang/bitalosdb/v2/internal/list2"
+	"github.com/zuoyebang/bitalosdb/v2/internal/options"
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
 	"github.com/stretchr/testify/require"
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/compress"
-	"github.com/zuoyebang/bitalosdb/internal/hash"
-	"github.com/zuoyebang/bitalosdb/internal/list2"
-	"github.com/zuoyebang/bitalosdb/internal/options"
 )
 
 const testdataDir = "test"
@@ -42,6 +42,7 @@ type testKvItem struct {
 	k  []byte
 	v  []byte
 	fn FileNum
+	sn uint64
 }
 
 func testGetBithashOpts(sz int) *options.BithashOptions {
@@ -63,20 +64,11 @@ func testBuildKV(num int) []testKvItem {
 	var kvList []testKvItem
 	for i := 0; i < num; i++ {
 		kvList = append(kvList, testKvItem{
-			k: []byte("vip:uinfo:scancode:" + strconv.Itoa(i)),
-			v: testGenValue(2048)})
+			k: []byte("bithash_testkey_" + strconv.Itoa(i)),
+			v: utils.FuncRandBytes(2048)})
 	}
 
 	return kvList
-}
-
-func testGenValue(size int) []byte {
-	buf := make([]byte, size)
-	for i := 0; i < size; i++ {
-		rand.Intn(122 - 65)
-		buf[i] = byte(rand.Intn(122-65) + 65)
-	}
-	return buf
 }
 
 func testOpenBithash() *Bithash {
@@ -134,7 +126,7 @@ func TestBithashOpen(t *testing.T) {
 	ek := make([]byte, len(key)+4)
 	pos := copy(ek, getSlotIndexBuf(key))
 	copy(ek[pos:], key)
-	khash := hash.Crc32(ek)
+	khash := hash.Fnv32(ek)
 	_, _, err := b.Get(ek, khash, 5)
 	require.Equal(t, ErrBhFileNumZero, err)
 	testBithashClose(t, b)
@@ -147,70 +139,6 @@ func testGetGID() uint64 {
 	b = b[:bytes.IndexByte(b, ' ')]
 	n, _ := strconv.ParseUint(string(b), 10, 64)
 	return n
-}
-
-func testBithashWriterFlush(b *Bithash) {
-	kvList := testBuildKV(10000)
-	fmt.Println("testBithashWriterFlush", testGetGID())
-	bhWriter, err := b.FlushStart()
-	if err != nil {
-		panic(err)
-	}
-	for i, item := range kvList {
-		ik := base.MakeInternalKey(item.k, 0, InternalKeyKindSet)
-		kvList[i].fn, err = bhWriter.Add(ik, item.v)
-		if err != nil {
-			panic(err)
-		}
-	}
-	err = b.FlushFinish(bhWriter)
-	if err != nil {
-		panic(err)
-	}
-}
-
-func testBithashWriterFlushAndGet(b *Bithash) {
-	gid := testGetGID()
-	var kvList []testKvItem
-	for i := 0; i < 1000; i++ {
-		kvList = append(kvList, testKvItem{
-			k: []byte(fmt.Sprintf("vip:uinfo:scancode:%d:%d", gid, i)),
-			v: testGenValue(2048)},
-		)
-	}
-
-	bhWriter, err := b.FlushStart()
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("testBithashWriterFlush write start", gid, bhWriter.GetFileNum())
-	for i, item := range kvList {
-		ik := base.MakeInternalKey(item.k, 0, InternalKeyKindSet)
-		kvList[i].fn, err = bhWriter.Add(ik, item.v)
-		if err != nil {
-			panic(err)
-		}
-	}
-	err = b.FlushFinish(bhWriter)
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Println("testBithashWriterFlush write done", gid)
-
-	for _, item := range kvList {
-		khash := hash.Crc32(item.k)
-		value, putBytePool, err := b.Get(item.k, khash, item.fn)
-		if err != nil {
-			fmt.Println("get fail", gid, string(item.k), item.fn)
-		}
-		if !bytes.Equal(value, item.v) {
-			panic(fmt.Sprintf("check kv fail k=%s fm=%d", string(item.k), uint64(item.fn)))
-		}
-		putBytePool()
-	}
-
-	fmt.Println("testBithashWriterFlush finish", gid)
 }
 
 func TestBithashCompactAndGet(t *testing.T) {
@@ -269,7 +197,7 @@ func TestBithashCompactAndGet(t *testing.T) {
 		}()
 		i := 0
 		for k, v, fn := iter.First(); iter.Valid(); k, v, fn = iter.Next() {
-			if err = bw.AddIkey(k, v, hash.Crc32(k.UserKey), fn); err != nil {
+			if err = bw.AddIkey(k, v, hash.Fnv32(k.UserKey), fn); err != nil {
 				return err
 			}
 			i++
@@ -287,7 +215,7 @@ func TestBithashCompactAndGet(t *testing.T) {
 	require.NoError(t, bw.Finish())
 
 	for _, item := range kvList {
-		khash := hash.Crc32(item.k)
+		khash := hash.Fnv32(item.k)
 		value, putBytePool, err := b.Get(item.k, khash, item.fn)
 		require.NoError(t, err)
 		if !bytes.Equal(item.v, value) {
@@ -304,7 +232,7 @@ func TestBithashCompactAndGet(t *testing.T) {
 		t.Fatal(err)
 	}
 	for k, _, fn := iter.First(); iter.Valid(); k, _, fn = iter.Next() {
-		khash := hash.Crc32(k.UserKey)
+		khash := hash.Fnv32(k.UserKey)
 		v, pool, err := b.Get(k.UserKey, khash, fn)
 		require.NoError(t, err)
 		require.Equal(t, 2048, len(v))
@@ -313,6 +241,52 @@ func TestBithashCompactAndGet(t *testing.T) {
 		}
 	}
 	require.NoError(t, iter.Close())
+	testBithashClose(t, b)
+}
+
+func TestBithashCompactIter(t *testing.T) {
+	dir := testdataDir
+	defer os.RemoveAll(dir)
+	os.RemoveAll(dir)
+	seqNum := uint64(1)
+	opts := testGetBithashOpts(512 << 20)
+	require.NoError(t, os.MkdirAll(dir, 0775))
+	b, err := Open(dir, opts)
+	require.NoError(t, err)
+
+	num := 102400
+	kvList := testBuildKV(num)
+	bhWriter, err1 := b.FlushStart()
+	require.NoError(t, err1)
+	for i, item := range kvList {
+		kvList[i].sn = seqNum
+		ik := base.MakeInternalKey(item.k, seqNum, InternalKeyKindSet)
+		kvList[i].fn, err = bhWriter.Add(ik, item.v)
+		require.NoError(t, err)
+		seqNum++
+	}
+	bhWriter.compact = true
+	require.NoError(t, b.FlushFinish(bhWriter))
+	testBithashClose(t, b)
+
+	b = testOpenBithash()
+	fileNum := FileNum(1)
+	iter, err2 := b.NewTableIter(fileNum)
+	require.NoError(t, err2)
+
+	i := 0
+	for k, v, fn := iter.First(); iter.Valid(); k, v, fn = iter.Next() {
+		item := kvList[i]
+		require.Equal(t, item.k, k.UserKey)
+		require.Equal(t, item.sn, k.SeqNum())
+		require.Equal(t, item.v, v)
+		require.Equal(t, fileNum, fn)
+		i++
+	}
+	require.Equal(t, num, i)
+	require.NoError(t, iter.Error())
+	require.NoError(t, iter.Close())
+
 	testBithashClose(t, b)
 }
 
@@ -341,7 +315,6 @@ func TestBithashCompactInterrupt(t *testing.T) {
 	bw, err := b.NewBithashWriter(true)
 	require.NoError(t, err)
 	newFileNum := bw.GetFileNum()
-	fmt.Println("newFileNum", newFileNum)
 	fileNums := make([]FileNum, 2)
 	fileNums[0] = FileNum(1)
 	fileNums[1] = FileNum(2)
@@ -355,7 +328,7 @@ func TestBithashCompactInterrupt(t *testing.T) {
 		}()
 		i := 0
 		for k, v, fn := iter.First(); iter.Valid(); k, v, fn = iter.Next() {
-			if e = bw.AddIkey(k, v, hash.Crc32(k.UserKey), fn); e != nil {
+			if e = bw.AddIkey(k, v, hash.Fnv32(k.UserKey), fn); e != nil {
 				return e
 			}
 			i++
@@ -386,40 +359,17 @@ func TestBithashWriterFlush(t *testing.T) {
 	defer os.RemoveAll(testdataDir)
 	os.RemoveAll(testdataDir)
 	b := testOpenBithash()
-	testBithashWriterFlush(b)
-	testBithashClose(t, b)
-}
-
-func TestBithashWriterExccedMax(t *testing.T) {
-	defer os.RemoveAll(testdataDir)
-	os.RemoveAll(testdataDir)
-	b := testOpenBithash()
-	num := 100
-	kvList := testBuildKV(num)
+	kvList := testBuildKV(10000)
 	bhWriter, err := b.FlushStart()
 	if err != nil {
 		panic(err)
 	}
-	for i := 0; i < num; i++ {
-		item := kvList[i]
+	for i, item := range kvList {
 		ik := base.MakeInternalKey(item.k, 0, InternalKeyKindSet)
 		kvList[i].fn, err = bhWriter.Add(ik, item.v)
 		require.NoError(t, err)
-		if i == num-1 {
-			bhWriter.wr.meta.Size = dataMaxSize - 100
-			kvList[i].fn, err = bhWriter.Add(ik, item.v)
-			if err == nil {
-				t.Fatalf("exceed max size not return err")
-			} else {
-				fmt.Println("exceed max size return err", err)
-			}
-		}
 	}
-
-	err = b.FlushFinish(bhWriter)
-	if err != nil {
-		panic(err)
-	}
+	require.NoError(t, b.FlushFinish(bhWriter))
 	testBithashClose(t, b)
 }
 
@@ -432,7 +382,38 @@ func TestBithashWriterConcurrencyFlush(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			testBithashWriterFlushAndGet(b)
+			func() {
+				gid := testGetGID()
+				var kvList []testKvItem
+				for i := 0; i < 1000; i++ {
+					kvList = append(kvList, testKvItem{
+						k: []byte(fmt.Sprintf("vip:uinfo:scancode:%d:%d", gid, i)),
+						v: utils.FuncRandBytes(2048)},
+					)
+				}
+
+				bhWriter, err := b.FlushStart()
+				if err != nil {
+					panic(err)
+				}
+				for i, item := range kvList {
+					ik := base.MakeInternalKey(item.k, 0, InternalKeyKindSet)
+					kvList[i].fn, err = bhWriter.Add(ik, item.v)
+					require.NoError(t, err)
+				}
+				err = b.FlushFinish(bhWriter)
+				if err != nil {
+					panic(err)
+				}
+
+				for _, item := range kvList {
+					khash := hash.Fnv32(item.k)
+					value, putBytePool, err := b.Get(item.k, khash, item.fn)
+					require.NoError(t, err)
+					require.Equal(t, item.v, value)
+					putBytePool()
+				}
+			}()
 		}()
 	}
 	wg.Wait()
@@ -461,7 +442,7 @@ func TestBithashFlushAndGet(t *testing.T) {
 	}
 
 	for _, item := range kvList {
-		khash := hash.Crc32(item.k)
+		khash := hash.Fnv32(item.k)
 		value, putBytePool, err := b.Get(item.k, khash, item.fn)
 		if err != nil {
 			panic(err)
@@ -498,14 +479,10 @@ func TestBithashFlushCloseAndGet(t *testing.T) {
 
 	b1 := testOpenBithash()
 	for _, item := range kvList {
-		khash := hash.Crc32(item.k)
+		khash := hash.Fnv32(item.k)
 		value, putBytePool, err := b1.Get(item.k, khash, item.fn)
-		if err != nil {
-			panic(err)
-		}
-		if !bytes.Equal(value, item.v) {
-			fmt.Println("check kv fail", string(item.k), item.fn)
-		}
+		require.NoError(t, err)
+		require.Equal(t, item.v, value)
 		putBytePool()
 	}
 
@@ -518,11 +495,6 @@ func TestBithashWriteAndGet(t *testing.T) {
 	seqNum := uint64(1)
 	b := testOpenBithash()
 	num := 2000
-
-	fmt.Println("open1 b.mufn.fnMap", len(b.mufn.fnMap))
-	for k, v := range b.mufn.fnMap {
-		fmt.Println("open1", k, v)
-	}
 
 	kvList := testBuildKV(num)
 	bhWriter, err := b.FlushStart()
@@ -537,10 +509,8 @@ func TestBithashWriteAndGet(t *testing.T) {
 	}
 	require.NoError(t, b.FlushFinish(bhWriter))
 
-	fmt.Println("write1 kv finish")
-
 	for _, item := range kvList {
-		khash := hash.Crc32(item.k)
+		khash := hash.Fnv32(item.k)
 		value, putBytePool, err := b.Get(item.k, khash, item.fn)
 		require.NoError(t, err)
 		if !bytes.Equal(item.v, value) {
@@ -552,11 +522,6 @@ func TestBithashWriteAndGet(t *testing.T) {
 	testBithashClose(t, b)
 
 	b = testOpenBithash()
-	fmt.Println("open2 b.mufn.fnMap", len(b.mufn.fnMap))
-	for k, v := range b.mufn.fnMap {
-		fmt.Println("open2", k, v)
-	}
-
 	kvList = testBuildKV(num)
 	bhWriter, err = b.FlushStart()
 	require.NoError(t, err)
@@ -571,11 +536,8 @@ func TestBithashWriteAndGet(t *testing.T) {
 	err = b.FlushFinish(bhWriter)
 	require.NoError(t, err)
 
-	fmt.Println("write2 kv finish")
-
-	fmt.Println("start get")
 	for _, item := range kvList {
-		khash := hash.Crc32(item.k)
+		khash := hash.Fnv32(item.k)
 		value, putBytePool, err := b.Get(item.k, khash, item.fn)
 		require.NoError(t, err)
 		if !bytes.Equal(item.v, value) {
@@ -587,11 +549,6 @@ func TestBithashWriteAndGet(t *testing.T) {
 	testBithashClose(t, b)
 
 	b = testOpenBithash()
-	fmt.Println("open3 b.mufn.fnMap", len(b.mufn.fnMap))
-	for k, v := range b.mufn.fnMap {
-		fmt.Println("open3", k, v)
-	}
-
 	testBithashClose(t, b)
 }
 
@@ -618,7 +575,7 @@ func TestBithashWriteAndClose(t *testing.T) {
 		testBithashClose(t, b)
 		b = testOpenBithash()
 		for _, item := range kvList {
-			khash := hash.Crc32(item.k)
+			khash := hash.Fnv32(item.k)
 			value, putBytePool, e := b.Get(item.k, khash, item.fn)
 			if e != nil {
 				t.Fatalf("get fail key:%s err:%s", string(item.k), err)
@@ -632,7 +589,6 @@ func TestBithashWriteAndClose(t *testing.T) {
 	}
 
 	for i := 0; i < 10; i++ {
-		fmt.Println("openclose", i)
 		writeFunc()
 	}
 }
@@ -644,8 +600,6 @@ func TestBithashKeyRepeat(t *testing.T) {
 	seqNum := uint64(1)
 	b := testOpenBithash()
 	num := 500
-
-	fmt.Println("start write 1")
 
 	kvList := testBuildKV(num)
 	bhWriter, err := b.FlushStart()
@@ -661,8 +615,6 @@ func TestBithashKeyRepeat(t *testing.T) {
 	err = b.FlushFinish(bhWriter)
 	require.NoError(t, err)
 
-	fmt.Println("start write 2")
-
 	kvList = testBuildKV(num)
 	bhWriter, err = b.FlushStart()
 	require.NoError(t, err)
@@ -677,10 +629,8 @@ func TestBithashKeyRepeat(t *testing.T) {
 	err = b.FlushFinish(bhWriter)
 	require.NoError(t, err)
 
-	fmt.Println("start get")
-
 	for _, item := range kvList {
-		khash := hash.Crc32(item.k)
+		khash := hash.Fnv32(item.k)
 		value, putBytePool, err := b.Get(item.k, khash, item.fn)
 		require.NoError(t, err)
 		require.Equal(t, item.v, value)
@@ -698,29 +648,27 @@ func TestBithashKeyHashConflict(t *testing.T) {
 	b := testOpenBithash_64MB()
 
 	conflictKeys := []string{
-		"m_T`UpDSxCr`ySymsoev",
-		"yjdJKx\\xjRgcMn\\OHr`_",
-		"tNurPFGNoJ_UROdugxXM",
-		"`pheCoLCfcAr_qCdaIhE",
-		"NvxogGOdNnpRAnRAVaW]",
-		"qAGjXZSJkJpFbojaeFFu",
-		"t_paOJENejFVUfP]npTQ",
-		"WwfjcpTd\\tRZ\\WgYVUZK",
-		"wQtERVmd^xpSk_]n[_\\k",
-		"Wd\\[BIVamMWtMyPEybOa",
-		"\\sJNnWFpmpjEumBPT]ol",
-		"yfNJhKZyKikCokteoMag",
+		"l41khazkyppk4sBj7BhdQxpfMGF2bKH9",
+		"zZah6yQoo4ElihZfMVwragoejhuHaocb",
+		"yBZrxusPKQdo1rKauI6rtOfs5tjbySx6",
+		"l0asXWDhSamz5qncres4xJSsaUK2Jhtz",
+		"wmoVNuhDBJOblKUS8wiSXNNmTjvcxrc7",
+		"H7fyvszFYYZqM0NnmfmjRjPoslT1V4nu",
+		"NplhsekvJnBm7gJHge5qsgJcqb68GCJu",
+		"1gncjKqtxufeiqwGfdpVrJubtEabsOyl",
+		"AqLMVOYwsi67FbCqHr2aivuoyKZH1eiW",
+		"zSpkzpkG9xbvR4IgqNcfF24pdg351Any",
+		"tk0F3dTRD8BGqaPAekliaDiZvRojoTk1",
+		"dzurIotnFYUPynzW6V9DzyfdzTzs2chx",
 	}
 
 	var conflictKvList []testKvItem
 	for _, k := range conflictKeys {
 		conflictKvList = append(conflictKvList, testKvItem{
 			k: []byte(k),
-			v: testGenValue(2048),
+			v: utils.FuncRandBytes(2048),
 		})
 	}
-
-	fmt.Println("start write 1")
 
 	kvList := testBuildKV(100)
 	bhWriter, err := b.FlushStart()
@@ -728,17 +676,13 @@ func TestBithashKeyHashConflict(t *testing.T) {
 	for i, item := range kvList {
 		ik := base.MakeInternalKey(item.k, seqNum, InternalKeyKindSet)
 		kvList[i].fn, err = bhWriter.Add(ik, item.v)
-		if err != nil {
-			panic(err)
-		}
+		require.NoError(t, err)
 		seqNum++
 		if i == 50 {
-			for i, item := range conflictKvList {
-				ik := base.MakeInternalKey(item.k, seqNum, InternalKeyKindSet)
-				conflictKvList[i].fn, err = bhWriter.Add(ik, item.v)
-				if err != nil {
-					panic(err)
-				}
+			for j, v := range conflictKvList {
+				ikey := base.MakeInternalKey(v.k, seqNum, InternalKeyKindSet)
+				conflictKvList[j].fn, err = bhWriter.Add(ikey, v.v)
+				require.NoError(t, err)
 				seqNum++
 			}
 		}
@@ -747,23 +691,22 @@ func TestBithashKeyHashConflict(t *testing.T) {
 	err = b.FlushFinish(bhWriter)
 	require.NoError(t, err)
 
-	readKv := func() {
+	read := func() {
 		for _, item := range kvList {
-			value, putBytePool, err := b.Get(item.k, hash.Crc32(item.k), item.fn)
+			value, putBytePool, err := b.Get(item.k, hash.Fnv32(item.k), item.fn)
 			require.NoError(t, err)
 			require.Equal(t, item.v, value)
 			putBytePool()
 		}
 		for _, item := range conflictKvList {
-			value, putBytePool, err := b.Get(item.k, hash.Crc32(item.k), item.fn)
+			value, putBytePool, err := b.Get(item.k, hash.Fnv32(item.k), item.fn)
 			require.NoError(t, err)
 			require.Equal(t, item.v, value)
 			putBytePool()
 		}
 	}
 
-	fmt.Println("start get1")
-	readKv()
+	read()
 
 	bhWriter, err = b.FlushStart()
 	require.NoError(t, err)
@@ -771,12 +714,9 @@ func TestBithashKeyHashConflict(t *testing.T) {
 	err = b.FlushFinish(bhWriter)
 	require.NoError(t, err)
 
-	fmt.Println("start get2")
-	readKv()
+	read()
 
 	fm := b.meta.mu.filesMeta[FileNum(1)]
-	fmt.Println("debuginfo", b.DebugInfo("test"))
-	fmt.Println("fm", fm)
 	require.Equal(t, uint32(112), fm.keyNum)
 	require.Equal(t, uint32(12), fm.conflictKeyNum)
 	testBithashClose(t, b)
@@ -803,23 +743,20 @@ func TestBithashOpenTableErrRebuild(t *testing.T) {
 	require.NoError(t, err1)
 	require.Equal(t, 5, n)
 	require.NoError(t, bhWriter.wr.Flush())
-	//if bhWriter.wr.currentOffset != uint32(409836) {
-	//	t.Fatalf("check currentOffset exp:409836 act:%d", bhWriter.wr.currentOffset)
-	//}
-	require.Equal(t, uint32(409836), bhWriter.wr.currentOffset)
-	require.Equal(t, int64(409841), bhWriter.wr.fileStatSize())
+	require.Equal(t, uint32(405072), bhWriter.wr.currentOffset)
+	require.Equal(t, int64(405077), bhWriter.wr.fileStatSize())
 	time.Sleep(2 * time.Second)
 	testBithashClose(t, b)
 
 	b = testOpenBithash()
 	bhWriter, err = b.FlushStart()
 	require.NoError(t, err)
-	require.Equal(t, uint32(409836), bhWriter.wr.currentOffset)
-	require.Equal(t, int64(409841), bhWriter.wr.fileStatSize())
+	require.Equal(t, uint32(405072), bhWriter.wr.currentOffset)
+	require.Equal(t, int64(405077), bhWriter.wr.fileStatSize())
 	require.NoError(t, b.FlushFinish(bhWriter))
 	time.Sleep(2 * time.Second)
 	for _, item := range kvList {
-		khash := hash.Crc32(item.k)
+		khash := hash.Fnv32(item.k)
 		value, putBytePool, err2 := b.Get(item.k, khash, item.fn)
 		require.NoError(t, err2)
 		require.Equal(t, item.v, value)
@@ -865,7 +802,7 @@ func TestBithashMemSize(t *testing.T) {
 		key := []byte(fmt.Sprintf("bit_%d+hash_test%d+%d", i, i+512, i+1024))
 		for j := 1; j < len(fileNum); j++ {
 			if i >= fileNum[j] && i < fileNum[j+1] || i >= fileNum[j] && fileNum[j+1] == 0 {
-				khash := hash.Crc32(key)
+				khash := hash.Fnv32(key)
 				v, putBytePool, err := b.Get(key, khash, FileNum(j))
 				if err != nil {
 					fmt.Printf("check kv fail k=%s fn=%d\n", key, j)
@@ -990,8 +927,6 @@ func TestBithashReadFile(t *testing.T) {
 	}()
 
 	filename := MakeFilepath(b.fs, b.dirname, fileTypeTable, fn)
-	fmt.Println("filename", filename)
-
 	f, err := b.fs.Open(filename)
 	if err != nil {
 		t.Fatal(err)

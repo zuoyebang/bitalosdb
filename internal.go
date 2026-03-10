@@ -14,43 +14,59 @@
 
 package bitalosdb
 
-import "github.com/zuoyebang/bitalosdb/internal/base"
+import (
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/kkv"
+)
 
 const (
-	fileTypeLog      = base.FileTypeLog
-	fileTypeLock     = base.FileTypeLock
-	fileTypeManifest = base.FileTypeManifest
-	fileTypeMeta     = base.FileTypeMeta
-	fileTypeCurrent  = base.FileTypeCurrent
+	fileTypeLock = base.FileTypeLock
+	fileTypeMeta = base.FileTypeMeta
 )
 
 const (
 	InternalKeyKindDelete       = base.InternalKeyKindDelete
 	InternalKeyKindSet          = base.InternalKeyKindSet
+	InternalKeyKindSetBithash   = base.InternalKeyKindSetBithash
 	InternalKeyKindLogData      = base.InternalKeyKindLogData
 	InternalKeyKindPrefixDelete = base.InternalKeyKindPrefixDelete
+	InternalKeyKindExpireAt     = base.InternalKeyKindExpireAt
 	InternalKeyKindMax          = base.InternalKeyKindMax
 	InternalKeySeqNumMax        = base.InternalKeySeqNumMax
+	InternalKeyKindInvalid      = base.InternalKeyKindInvalid
 )
 
-type InternalKeyKind = base.InternalKeyKind
-
-type InternalKey = base.InternalKey
-
-type internalIterator = base.InternalIterator
+const (
+	DataTypeNone      = kkv.DataTypeNone
+	DataTypeString    = kkv.DataTypeString
+	DataTypeBitmap    = kkv.DataTypeBitmap
+	DataTypeHash      = kkv.DataTypeHash
+	DataTypeList      = kkv.DataTypeList
+	DataTypeSet       = kkv.DataTypeSet
+	DataTypeZset      = kkv.DataTypeZset
+	DataTypeZsetIndex = kkv.DataTypeZsetIndex
+	DataTypeDKHash    = kkv.DataTypeDKHash
+	DataTypeDKSet     = kkv.DataTypeDKSet
+)
 
 type FileNum = base.FileNum
-
 type Compare = base.Compare
-
 type Equal = base.Equal
-
-type Split = base.Split
-
 type Comparer = base.Comparer
-
 type Logger = base.Logger
+
+type InternalKeyKind = base.InternalKeyKind
+type InternalKey = base.InternalKey
+type internalIterator = base.InternalIterator
+
+type InternalKKVKey = kkv.InternalKey
+type InternalKKVIterator = kkv.InternalIterator
 
 var DefaultComparer = base.DefaultComparer
 
 var DefaultLogger = base.DefaultLogger
+
+type ScorePair struct {
+	Score  float64
+	Member []byte
+}

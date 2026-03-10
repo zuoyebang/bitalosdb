@@ -19,8 +19,8 @@ import (
 	"errors"
 	"unsafe"
 
-	"github.com/zuoyebang/bitalosdb/internal/base"
-	"github.com/zuoyebang/bitalosdb/internal/cache/lrucache"
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/cache/lrucache"
 )
 
 type BlockHandle struct {
@@ -249,7 +249,7 @@ func (i *blockIter) readFirstKey() error {
 	} else {
 		i.firstKey.Trailer = uint64(InternalKeyKindInvalid)
 		i.firstKey.UserKey = nil
-		return base.CorruptionErrorf("bitalosdb: invalid firstKey in block")
+		return errors.New("bitalosdb: invalid firstKey in block")
 	}
 	return nil
 }
@@ -347,12 +347,6 @@ func (i *blockIter) SeekGE(key []byte) (*InternalKey, []byte) {
 	}
 
 	return nil, nil
-}
-
-func (i *blockIter) SeekPrefixGE(
-	prefix, key []byte, trySeekUsingNext bool,
-) (*base.InternalKey, []byte) {
-	panic("bitalosdb: SeekPrefixGE unimplemented")
 }
 
 func (i *blockIter) SeekLT(key []byte) (*InternalKey, []byte) {

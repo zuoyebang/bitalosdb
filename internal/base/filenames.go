@@ -20,7 +20,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/zuoyebang/bitalosdb/internal/vfs"
+	"github.com/zuoyebang/bitalosdb/v2/internal/vfs"
 )
 
 type FileNum uint64
@@ -38,11 +38,11 @@ const (
 )
 
 const (
-	BitreeFilePrefix  = "bitree."
-	BitpageFilePrefix = "bitpage."
-	BithashPathPrefix = "bithash."
-	BitablePathPrefix = "bitable."
-	WalPathPrefix     = "wal."
+	BitreeFilePrefix   = "bitree."
+	BitpageFilePrefix  = "bitpage."
+	BithashPathPrefix  = "bithash."
+	BituplePathPrefix  = "bituple."
+	VmVtablePathPrefix = "vmvt."
 )
 
 func MakeFilename(fileType FileType, fileNum FileNum) string {
@@ -77,12 +77,12 @@ func MakeBithashpath(dir string, i int) string {
 	return filepath.Join(dir, BithashPathPrefix+strconv.Itoa(i))
 }
 
-func MakeBitablepath(dir string, i int) string {
-	return filepath.Join(dir, BitablePathPrefix+strconv.Itoa(i))
+func MakeBituplepath(dir string, i int) string {
+	return filepath.Join(dir, BituplePathPrefix+strconv.Itoa(i))
 }
 
-func MakeWalpath(dir string, i int) string {
-	return filepath.Join(dir, WalPathPrefix+strconv.Itoa(i))
+func MakeVmVtablepath(dir string, i int) string {
+	return filepath.Join(dir, VmVtablePathPrefix+strconv.Itoa(i))
 }
 
 func ParseFilename(fs vfs.FS, filename string) (fileType FileType, fileNum FileNum, ok bool) {

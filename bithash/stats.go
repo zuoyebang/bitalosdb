@@ -19,7 +19,8 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"github.com/zuoyebang/bitalosdb/internal/utils"
+	"github.com/zuoyebang/bitalosdb/v2/internal/os2"
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
 )
 
 type Stats struct {
@@ -61,15 +62,17 @@ func (b *Bithash) StatsToString() string {
 	return b.stats.String()
 }
 
-func (b *Bithash) DebugInfo(dataType string) string {
+func (b *Bithash) GetDirname() string {
+	return b.dirname
+}
+
+func (b *Bithash) DebugInfo() string {
 	b.meta.mu.RLock()
 	defer b.meta.mu.RUnlock()
 
 	buf := new(bytes.Buffer)
-	fmt.Fprintf(buf, "%s-bithash%d:dirname=%s dirSize=%s files=%d\n",
-		dataType, b.index, b.dirname,
-		utils.FmtSize(utils.GetDirSize(b.dirname)),
-		len(b.meta.mu.filesMeta))
+	fmt.Fprintf(buf, "bithash%d:dirname=%s dirSize=%s files=%d\n",
+		b.index, b.dirname, utils.FmtSize(os2.GetDirSize(b.dirname)), len(b.meta.mu.filesMeta))
 
 	for fn, fileMeta := range b.meta.mu.filesMeta {
 		if fileMeta.state == fileMetaStateImmutable {
@@ -79,9 +82,9 @@ func (b *Bithash) DebugInfo(dataType string) string {
 			} else {
 				delPercent = float64(fileMeta.delKeyNum) / float64(fileMeta.keyNum)
 			}
-			fmt.Fprintf(buf, "%s-bithash%d-%d.bht:%s delPercent=%.2f\n", dataType, b.index, fn, fileMeta.String(), delPercent)
+			fmt.Fprintf(buf, "bithash%d-%d.bht:%s delPercent=%.2f\n", b.index, fn, fileMeta.String(), delPercent)
 		} else {
-			fmt.Fprintf(buf, "%s-bithash%d-%d.bht:%s\n", dataType, b.index, fn, fileMeta.String())
+			fmt.Fprintf(buf, "bithash%d-%d.bht:%s\n", b.index, fn, fileMeta.String())
 		}
 	}
 

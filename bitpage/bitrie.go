@@ -27,6 +27,8 @@ const (
 	BitrieHeaderSize = 18
 	BitrieKeySize    = 1
 	BitrieIndexSize  = 4
+	PruneKeySize     = 2
+	PruneKeyValFlag  = 1
 )
 
 const (

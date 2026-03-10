@@ -17,7 +17,7 @@
 package vfs
 
 import (
-	"github.com/zuoyebang/bitalosdb/internal/errors"
+	"github.com/zuoyebang/bitalosdb/v2/internal/errors"
 	"golang.org/x/sys/windows"
 )
 

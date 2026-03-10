@@ -16,609 +16,1172 @@ package bitalosdb
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
+	"math/rand"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/zuoyebang/bitalosdb/internal/vfs"
-
+	"github.com/zuoyebang/bitalosdb/v2/internal/base"
+	"github.com/zuoyebang/bitalosdb/v2/internal/hash"
+	"github.com/zuoyebang/bitalosdb/v2/internal/options"
+	"github.com/zuoyebang/bitalosdb/v2/internal/os2"
+	"github.com/zuoyebang/bitalosdb/v2/internal/sortedkv"
+	"github.com/zuoyebang/bitalosdb/v2/internal/utils"
+	"github.com/zuoyebang/bitalosdb/v2/internal/vfs"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/exp/rand"
 )
 
-func try(initialSleep, maxTotalSleep time.Duration, f func() error) error {
-	totalSleep := time.Duration(0)
-	for d := initialSleep; ; d *= 2 {
-		time.Sleep(d)
-		totalSleep += d
-		if err := f(); err == nil || totalSleep >= maxTotalSleep {
-			return err
+const (
+	testDirname        = "./test-data"
+	testSlotId  uint16 = 1
+)
+
+func makeTestIntKey(i int) []byte {
+	return sortedkv.MakeSortedKey(i)
+}
+
+func makeTestIntValue(i int, v []byte) []byte {
+	return []byte(fmt.Sprintf("%s_%d", v, i))
+}
+
+func makeTestKeySlotid(key []byte) uint16 {
+	khash := hash.Fnv32(key)
+	return uint16(khash & metaSlotNumMask)
+}
+
+func openTestDB(dir string) *DB {
+	opts := &Options{
+		Logger:              DefaultLogger,
+		VectorTableCount:    1,
+		VectorTableHashSize: 262144,
+		GetNowTimestamp:     options.DefaultGetNowTimestamp,
+		VmTableSize:         32 << 20,
+		MemTableSize:        32 << 20,
+		BitpageFlushSize:    10 << 20,
+		BitpageSplitSize:    20 << 20,
+		BithashTableSize:    10 << 20,
+	}
+	return openTestDBByOpts(dir, opts)
+}
+
+func openTestDB1(dir string, useMiniVi bool) *DB {
+	opts := &Options{
+		Logger:               DefaultLogger,
+		VectorTableCount:     1,
+		VectorTableHashSize:  262144,
+		GetNowTimestamp:      options.DefaultGetNowTimestamp,
+		VmTableSize:          32 << 20,
+		MemTableSize:         32 << 20,
+		BitpageFlushSize:     10 << 20,
+		BitpageSplitSize:     20 << 20,
+		BitpageDisableMiniVi: useMiniVi,
+		BithashTableSize:     10 << 20,
+	}
+	return openTestDBByOpts(dir, opts)
+}
+
+func openTestDB2(dir string, count uint16, disableStoreKey bool) *DB {
+	opts := &Options{
+		Logger:              DefaultLogger,
+		DisableStoreKey:     disableStoreKey,
+		VectorTableCount:    count,
+		VectorTableHashSize: 262144,
+		GetNowTimestamp:     options.DefaultGetNowTimestamp,
+		VmTableSize:         32 << 20,
+		MemTableSize:        32 << 20,
+		BitpageFlushSize:    10 << 20,
+		BitpageSplitSize:    20 << 20,
+		BithashTableSize:    10 << 20,
+	}
+	return openTestDBByOpts(dir, opts)
+}
+
+func openTestDBByOpts(dir string, opts *Options) *DB {
+	_, err := os.Stat(dir)
+	if os.IsNotExist(err) {
+		if err = os.MkdirAll(dir, 0775); err != nil {
+			panic(err)
 		}
+	}
+
+	db, err := Open(dir, opts)
+	if err != nil {
+		panic(err)
+	}
+	return db
+}
+
+func testGet(t *testing.T, d *DB, key []byte, slotId uint16, expVal []byte, expDt uint8, expTTL uint64) {
+	value, dt, timestamp, closer, err := d.Get(key, slotId)
+	if err != nil {
+		t.Fatalf("get fail key:%s err:%s\n", string(key), err)
+	} else if !bytes.Equal(expVal, value) {
+		t.Fatalf("get fail val not eq key:%s exp:%s act:%s\n", string(key), string(expVal), string(value))
+	} else if dt != expDt {
+		t.Fatalf("get fail dt not eq key:%s exp:%d act:%d\n", string(key), expDt, dt)
+	} else if expTTL != timestamp {
+		t.Fatalf("get fail ttl not eq key:%s exp:%d act:%d\n", string(key), expTTL, timestamp)
+	} else if closer != nil {
+		closer()
 	}
 }
 
-func TestTry(t *testing.T) {
-	c := make(chan struct{})
-	go func() {
-		time.Sleep(1 * time.Millisecond)
-		close(c)
-	}()
-
-	attemptsMu := sync.Mutex{}
-	attempts := 0
-
-	err := try(100*time.Microsecond, 20*time.Second, func() error {
-		attemptsMu.Lock()
-		attempts++
-		attemptsMu.Unlock()
-
-		select {
-		default:
-			return errors.New("timed out")
-		case <-c:
-			return nil
-		}
-	})
-	require.NoError(t, err)
-
-	attemptsMu.Lock()
-	a := attempts
-	attemptsMu.Unlock()
-
-	if a == 0 {
-		t.Fatalf("attempts: got 0, want > 0")
+func testGetNotFound(t *testing.T, d *DB, key []byte, slotId uint16) {
+	_, _, _, _, err := d.Get(key, slotId)
+	if err != base.ErrNotFound {
+		t.Errorf("find not exist key:%s\n", string(key))
 	}
 }
 
-func TestBasicBitowerWrites(t *testing.T) {
+func TestDBOpen(t *testing.T) {
 	dir := testDirname
 	defer os.RemoveAll(dir)
 	os.RemoveAll(dir)
 
-	db := openTestDB(testDirname, nil)
-	defer func() {
-		require.NoError(t, db.Close())
-	}()
+	db := openTestDB(dir)
+	for i := 0; i < 2; i++ {
+		key := makeTestIntKey(i)
+		require.NoError(t, db.Set(key, uint16(i), DataTypeString, 0, utils.FuncRandBytes(1024)))
+	}
+	require.NoError(t, db.Close())
 
-	names := []string{
-		"Alatar",
-		"Gandalf",
-		"Pallando",
-		"Radagast",
-		"Saruman",
-		"Joe",
-	}
-	wantMap := map[string]string{}
+	db = openTestDB(dir)
+	require.NoError(t, db.Close())
+}
 
-	batchNew := func() *BatchBitower {
-		return newBatchBitowerByIndex(db, int(testSlotId))
+func TestDBOpenClose(t *testing.T) {
+	dir := testDirname
+	defer os.RemoveAll(dir)
+	os.RemoveAll(dir)
+
+	fs := vfs.Default
+	opts := &Options{
+		FS: fs,
 	}
 
-	inBatch, batch, pending := false, batchNew(), [][]string(nil)
-	set0 := func(k, v string) error {
-		return db.Set(makeTestSlotKey([]byte(k)), []byte(v), nil)
-	}
-	del0 := func(k string) error {
-		return db.Delete(makeTestSlotKey([]byte(k)), nil)
-	}
-	set1 := func(k, v string) error {
-		batch.Set(makeTestSlotKey([]byte(k)), []byte(v), nil)
-		return nil
-	}
-	del1 := func(k string) error {
-		batch.Delete(makeTestSlotKey([]byte(k)), nil)
-		return nil
-	}
-	set, del := set0, del0
+	for _, startFromEmpty := range []bool{false, true} {
+		for _, length := range []int{-1, 0, 1, 128, 256} {
+			dirname := "/sharedDatabase"
+			if startFromEmpty {
+				dirname = "/startFromEmpty" + strconv.Itoa(length)
+			}
+			dirname = fs.PathJoin(dir, dirname)
+			got, xxx := []byte(nil), ""
+			if length >= 0 {
+				xxx = strings.Repeat("x", length)
+			}
 
-	testCases := []string{
-		"set Gandalf Grey",
-		"set Saruman White",
-		"set Radagast Brown",
-		"delete Saruman",
-		"set Gandalf White",
-		"batch",
-		"  set Alatar AliceBlue",
-		"apply",
-		"delete Pallando",
-		"set Alatar AntiqueWhite",
-		"set Pallando PapayaWhip",
-		"batch",
-		"apply",
-		"set Pallando PaleVioletRed",
-		"batch",
-		"  delete Alatar",
-		"  set Gandalf GhostWhite",
-		"  set Saruman Seashell",
-		"  delete Saruman",
-		"  set Saruman SeaGreen",
-		"  set Radagast RosyBrown",
-		"  delete Pallando",
-		"apply",
-		"delete Radagast",
-		"delete Radagast",
-		"delete Radagast",
-		"set Gandalf Goldenrod",
-		"set Pallando PeachPuff",
-		"batch",
-		"  delete Joe",
-		"  delete Saruman",
-		"  delete Radagast",
-		"  delete Pallando",
-		"  delete Gandalf",
-		"  delete Alatar",
-		"apply",
-		"set Joe Plumber",
-	}
-	for i, tc := range testCases {
-		s := strings.Split(strings.TrimSpace(tc), " ")
-		switch s[0] {
-		case "set":
-			if err := set(s[1], s[2]); err != nil {
-				t.Fatalf("#%d %s: %v", i, tc, err)
+			d0, err := Open(dirname, opts)
+			if err != nil {
+				t.Fatalf("sfe=%t, length=%d: Open #0: %v", startFromEmpty, length, err)
 			}
-			if inBatch {
-				pending = append(pending, s)
-			} else {
-				wantMap[s[1]] = s[2]
-			}
-		case "delete":
-			if err := del(s[1]); err != nil {
-				t.Fatalf("#%d %s: %v", i, tc, err)
-			}
-			if inBatch {
-				pending = append(pending, s)
-			} else {
-				delete(wantMap, s[1])
-			}
-		case "batch":
-			inBatch, batch, set, del = true, batchNew(), set1, del1
-		case "apply":
-			if err := db.ApplyBitower(batch, NoSync); err != nil {
-				t.Fatalf("#%d %s: %v", i, tc, err)
-			}
-			for _, p := range pending {
-				switch p[0] {
-				case "set":
-					wantMap[p[1]] = p[2]
-				case "delete":
-					delete(wantMap, p[1])
+			if length >= 0 {
+				tmpk := []byte("key")
+				err = d0.Set(tmpk, makeTestKeySlotid(tmpk), DataTypeString, 0, []byte(xxx))
+				if err != nil {
+					t.Fatalf("sfe=%t, length=%d: Set: %v", startFromEmpty, length, err)
 				}
 			}
-			inBatch, pending, set, del = false, nil, set0, del0
-		default:
-			t.Fatalf("#%d %s: bad test case: %q", i, tc, s)
-		}
+			err = d0.Close()
+			if err != nil {
+				t.Fatalf("sfe=%t, length=%d: Close #0: %v", startFromEmpty, length, err)
+			}
 
-		fail := false
-		for _, name := range names {
-			key := makeTestSlotKey([]byte(name))
-			g, closer, err := db.Get(key)
-			if err != nil && err != ErrNotFound {
-				t.Errorf("#%d %s: Get(%q): %v", i, tc, name, err)
-				fail = true
+			d1, err1 := Open(dirname, opts)
+			if err1 != nil {
+				t.Errorf("sfe=%t, length=%d: Open #1: %v", startFromEmpty, length, err1)
+				continue
 			}
-			_, err = db.Exist(key)
-			if err != nil && err != ErrNotFound {
-				t.Errorf("#%d %s: Exist(%q): %v", i, tc, name, err)
-				fail = true
-			}
-			got, gOK := string(g), err == nil
-			want, wOK := wantMap[name]
-			if got != want || gOK != wOK {
-				t.Errorf("#%d %s: Get(%q): got %q, %t, want %q, %t",
-					i, tc, name, got, gOK, want, wOK)
-				fail = true
-			}
-			if closer != nil {
+			if length >= 0 {
+				var closer func()
+				tmpk := []byte("key")
+				got, _, _, closer, err = d1.Get(tmpk, makeTestKeySlotid(tmpk))
+				if err != nil {
+					t.Errorf("sfe=%t, length=%d: Get: %v", startFromEmpty, length, err)
+					continue
+				}
+				got = append([]byte(nil), got...)
 				closer()
 			}
-		}
-		if fail {
-			return
+			err = d1.Close()
+			if err != nil {
+				t.Errorf("sfe=%t, length=%d: Close #1: %v", startFromEmpty, length, err)
+				continue
+			}
+
+			if length >= 0 && string(got) != xxx {
+				t.Errorf("sfe=%t, length=%d: got value differs from set value", startFromEmpty, length)
+				continue
+			}
 		}
 	}
 }
 
-func TestEmptyMemtable(t *testing.T) {
+func TestDBExpireAt(t *testing.T) {
 	dir := testDirname
 	defer os.RemoveAll(dir)
 	os.RemoveAll(dir)
-	db, err := Open(dir, &Options{})
+
+	db := openTestDB(dir)
+	nowTime := uint64(time.Now().UnixMilli())
+	key := makeTestIntKey(100)
+	ts := nowTime + 100*1000
+	dt := DataTypeString
+	sid := makeTestKeySlotid(key)
+	shard := db.getVmShard(sid)
+
+	n, _, err := db.ExpireAt(key, sid, 0)
 	require.NoError(t, err)
+	require.Equal(t, int64(0), n)
 
-	checkEmpty := func(index int) {
-		d := db.bitowers[index]
-		d.mu.Lock()
-		empty := true
-		for i := range d.mu.mem.queue {
-			if !d.mu.mem.queue[i].empty() {
-				empty = false
-				break
-			}
+	var v []byte
+	opCmd := func() {
+		for i := 0; i < 2; i++ {
+			v = utils.FuncRandBytes(100)
+			require.NoError(t, db.Set(key, sid, dt, ts, v))
+			testGet(t, db, key, sid, v, dt, ts)
+
+			n, _, err = db.ExpireAt(key, sid, 0)
+			require.NoError(t, err)
+			require.Equal(t, int64(1), n)
+			n, _, err = db.ExpireAt(key, sid, 0)
+			require.NoError(t, err)
+			require.Equal(t, int64(0), n)
+			testGet(t, db, key, sid, v, dt, 0)
+
+			n, _, err = db.ExpireAt(key, sid, ts)
+			require.NoError(t, err)
+			require.Equal(t, int64(1), n)
+
+			shard.makeRoomForWrite(false, false)
+
+			n, _, err = db.ExpireAt(key, sid, ts)
+			require.NoError(t, err)
+			require.Equal(t, int64(1), n)
+
+			dataType, oldTs, err2 := db.GetTimestamp(key, sid)
+			require.NoError(t, err2)
+			require.Equal(t, dt, dataType)
+			require.Equal(t, ts, oldTs)
+			testGet(t, db, key, sid, v, dt, ts)
+
+			v = utils.FuncRandBytes(100)
+			require.NoError(t, db.Set(key, sid, dt, ts, v))
+			testGet(t, db, key, sid, v, dt, ts)
+
+			require.NoError(t, db.Flush(false))
+
+			ts += 100000
+			n, _, err = db.ExpireAt(key, sid, ts)
+			require.NoError(t, err)
+			require.Equal(t, int64(1), n)
+			n, _, err = db.ExpireAt(key, sid, ts)
+			require.NoError(t, err)
+			require.Equal(t, int64(1), n)
+			testGet(t, db, key, sid, v, dt, ts)
+
+			n, _, err = db.ExpireAt(key, sid, 0)
+			require.NoError(t, err)
+			require.Equal(t, int64(1), n)
+			n, _, err = db.ExpireAt(key, sid, 0)
+			require.NoError(t, err)
+			require.Equal(t, int64(0), n)
+			testGet(t, db, key, sid, v, dt, 0)
+
+			v = utils.FuncRandBytes(100)
+			ts += 100000
+			require.NoError(t, db.Set(key, sid, dt, ts, v))
+			dataType, oldTs, err2 = db.GetTimestamp(key, sid)
+			require.NoError(t, err2)
+			require.Equal(t, dt, dataType)
+			require.Equal(t, ts, oldTs)
+			testGet(t, db, key, sid, v, dt, ts)
+
+			ts += 100000
+			n, _, err = db.ExpireAt(key, sid, ts)
+			require.NoError(t, err)
+			require.Equal(t, int64(1), n)
+			n, _, err = db.ExpireAt(key, sid, ts)
+			require.NoError(t, err)
+			require.Equal(t, int64(1), n)
+			testGet(t, db, key, sid, v, dt, ts)
 		}
-		d.mu.Unlock()
-		require.Equal(t, true, empty)
 	}
 
-	for i := 0; i < len(db.bitowers); i++ {
-		checkEmpty(i)
-	}
+	opCmd()
+	require.NoError(t, db.Close())
+
+	db = openTestDB(dir)
+	testGet(t, db, key, sid, v, dt, ts)
+	opCmd()
+	require.NoError(t, db.Close())
+}
+
+func TestDBComplexExpireAt(t *testing.T) {
+	dir := testDirname
+	defer os.RemoveAll(dir)
+	os.RemoveAll(dir)
+
+	db := openTestDB(dir)
+	nowTime := uint64(time.Now().UnixMilli())
+	key := makeTestIntKey(100)
+	subKey1 := makeTestIntKey(200)
+	subKey2 := makeTestIntKey(300)
+	subKey3 := makeTestIntKey(400)
+	ts := nowTime + 100*1000
+	dt := DataTypeHash
+	sid := makeTestKeySlotid(key)
+	shard := db.getVmShard(sid)
+
+	n, _, err := db.ExpireAt(key, sid, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), n)
+
+	n, err = db.HMSet(key, sid, subKey1, subKey1, subKey2, subKey2)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), n)
+
+	_, timestamp, version, _, _, size, _ := db.GetMeta(key, sid)
+	require.Equal(t, uint64(0), timestamp)
+	require.Equal(t, uint32(2), size)
+
+	shard.makeRoomForWrite(false, false)
+
+	n, _, err = db.ExpireAt(key, sid, ts)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	size, _ = db.GetMetaSize(key, sid)
+	require.Equal(t, uint32(2), size)
+
+	n, _, err = db.ExpireAt(key, sid, ts)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	size, _ = db.GetMetaSize(key, sid)
+	require.Equal(t, uint32(2), size)
+
+	require.NoError(t, db.Flush(false))
+
+	n, _, err = db.ExpireAt(key, sid, ts)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	shard.makeRoomForWrite(false, false)
+
+	n, err = db.HMSet(key, sid, subKey3, subKey3)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	ts += 100 * 1000
+	n, _, err = db.ExpireAt(key, sid, ts)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	_, timestamp, version, _, _, size, _ = db.GetMeta(key, sid)
+	require.NoError(t, err)
+	require.Equal(t, ts, timestamp)
+	require.Equal(t, uint32(3), size)
+
+	subValue, closer, err1 := db.HGet(key, sid, subKey1)
+	require.NoError(t, err1)
+	require.Equal(t, subKey1, subValue)
+	closer()
+
+	dataType, oldTs, err2 := db.GetTimestamp(key, sid)
+	require.NoError(t, err2)
+	require.Equal(t, dt, dataType)
+	require.Equal(t, ts, oldTs)
+
+	n, _, err = db.ExpireAt(key, sid, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+	dataType, oldTs, err2 = db.GetTimestamp(key, sid)
+	require.NoError(t, err2)
+	require.Equal(t, dt, dataType)
+	require.Equal(t, uint64(0), oldTs)
+
+	n, _, err = db.ExpireAt(key, sid, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), n)
+
+	require.NoError(t, db.Flush(false))
+
+	ts += 100 * 1000
+	n, _, err = db.ExpireAt(key, sid, ts)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	dataType, oldTs, err2 = db.GetTimestamp(key, sid)
+	require.NoError(t, err2)
+	require.Equal(t, dt, dataType)
+	require.Equal(t, ts, oldTs)
+
+	ts1 := ts + 1000*1000
+	n, _, err = db.ExpireAt(key, sid, ts1)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	_, timestamp, version, _, _, size, _ = db.GetMeta(key, sid)
+	require.Equal(t, ts1, timestamp)
+	require.Equal(t, uint32(3), size)
+
+	require.Equal(t, false, db.eliTask.existExpireKey(sid, version, ts))
+	require.Equal(t, true, db.eliTask.existExpireKey(sid, version, ts1))
+
+	require.NoError(t, db.Close())
+
+	db = openTestDB(dir)
+	subValue, closer, err = db.HGet(key, sid, subKey2)
+	require.NoError(t, err)
+	require.Equal(t, subKey2, subValue)
+	closer()
+
+	_, timestamp, version, _, _, size, _ = db.GetMeta(key, sid)
+	require.Equal(t, ts1, timestamp)
+	require.Equal(t, uint32(3), size)
+
+	require.Equal(t, false, db.eliTask.existExpireKey(sid, version, 0))
+	require.Equal(t, false, db.eliTask.existExpireKey(sid, version, ts))
+	require.Equal(t, true, db.eliTask.existExpireKey(sid, version, ts1))
+
+	ts = ts1 + 1000*1000
+	n, _, err = db.ExpireAt(key, sid, ts)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+	n, _, err = db.ExpireAt(key, sid, ts)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	subValue, closer, err = db.HGet(key, sid, subKey1)
+	require.NoError(t, err)
+	require.Equal(t, subKey1, subValue)
+	subValue, closer, err = db.HGet(key, sid, subKey2)
+	require.NoError(t, err)
+	require.Equal(t, subKey2, subValue)
+	closer()
+
+	dataType, oldTs, err = db.GetTimestamp(key, sid)
+	require.NoError(t, err)
+	require.Equal(t, dt, dataType)
+	require.Equal(t, ts, oldTs)
+
+	n, _, err = db.ExpireAt(key, sid, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+	n, _, err = db.ExpireAt(key, sid, 0)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), n)
+
+	dataType, oldTs, err = db.GetTimestamp(key, sid)
+	require.NoError(t, err)
+	require.Equal(t, dt, dataType)
+	require.Equal(t, uint64(0), oldTs)
+
+	ts1 = ts + 1000*1000
+	n, _, err = db.ExpireAt(key, sid, ts1)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	_, timestamp, version, _, _, size, _ = db.GetMeta(key, sid)
+	require.Equal(t, ts1, timestamp)
+	require.Equal(t, uint32(3), size)
+
+	require.Equal(t, false, db.eliTask.existExpireKey(sid, version, ts))
+	require.Equal(t, true, db.eliTask.existExpireKey(sid, version, ts1))
 
 	require.NoError(t, db.Close())
 }
 
-func TestNotEmptyMemtable(t *testing.T) {
+func TestDBVtGC(t *testing.T) {
 	dir := testDirname
 	defer os.RemoveAll(dir)
 	os.RemoveAll(dir)
-	db, err := Open(dir, &Options{})
-	require.NoError(t, err)
 
-	key := makeTestKey([]byte("a"))
-	require.NoError(t, db.Set(key, key, nil))
-
-	index := db.getBitowerIndexByKey(key)
-	d := db.bitowers[index]
-	d.mu.Lock()
-	empty := true
-	for i := range d.mu.mem.queue {
-		if !d.mu.mem.queue[i].empty() {
-			empty = false
-			break
+	db := openTestDB(dir)
+	slotId := testSlotId
+	dt := DataTypeString
+	keyNum := 1000
+	expireTime := db.opts.GetNowTimestamp() + 2000
+	for i := 0; i < keyNum; i++ {
+		key := makeTestIntKey(i)
+		var ts uint64
+		if i%2 == 0 {
+			ts = expireTime
 		}
+		require.NoError(t, db.Set(key, slotId, dt, ts, key))
 	}
-	d.mu.Unlock()
-	require.Equal(t, false, empty)
-	require.NoError(t, db.Close())
-}
 
-func TestRandomWrites(t *testing.T) {
-	dir := testDirname
-	defer os.RemoveAll(dir)
-	os.RemoveAll(dir)
-	d, err := Open(dir, &Options{
-		FS:           vfs.Default,
-		MemTableSize: 1 << 20,
-	})
-	require.NoError(t, err)
-
-	keys := [64][]byte{}
-	wants := [64]int{}
-	for k := range keys {
-		keys[k] = makeTestIntKey(k)
-		wants[k] = -1
+	for i := 0; i < keyNum; i++ {
+		key := makeTestIntKey(i)
+		var ts uint64
+		if i%2 == 0 {
+			ts = expireTime
+		}
+		testGet(t, db, key, slotId, key, dt, ts)
 	}
-	xxx := bytes.Repeat([]byte("x"), 512)
 
-	rng := rand.New(rand.NewSource(123))
-	const N = 1000
-	for i := 0; i < N; i++ {
-		k := rng.Intn(len(keys))
-		if rng.Intn(20) != 0 {
-			wants[k] = rng.Intn(len(xxx) + 1)
-			if err := d.Set(keys[k], xxx[:wants[k]], nil); err != nil {
-				t.Fatalf("i=%d: Set: %v", i, err)
-			}
+	require.NoError(t, db.FlushVm())
+
+	time.Sleep(4 * time.Second)
+	db.doVtGC(true)
+
+	for i := 0; i < keyNum; i++ {
+		key := makeTestIntKey(i)
+		if i%2 == 0 {
+			testGetNotFound(t, db, key, slotId)
 		} else {
-			wants[k] = -1
-			if err := d.Delete(keys[k], nil); err != nil {
-				t.Fatalf("i=%d: Delete: %v", i, err)
-			}
-		}
-
-		if i != N-1 || rng.Intn(50) != 0 {
-			continue
-		}
-		for k := range keys {
-			got := -1
-			if v, closer, err := d.Get(keys[k]); err != nil {
-				if err != ErrNotFound {
-					t.Fatalf("Get: %v", err)
-				}
-			} else {
-				got = len(v)
-				closer()
-			}
-			exist, err := d.Exist(keys[k])
-			if exist {
-				t.Fatalf("Exist: %v", err)
-			}
-			if got != wants[k] {
-				t.Errorf("i=%d, k=%d: got %d, want %d", i, k, got, wants[k])
-			}
+			testGet(t, db, key, slotId, key, dt, 0)
 		}
 	}
 
-	require.NoError(t, d.Close())
+	require.NoError(t, db.Close())
 }
 
-func TestGetNoCache(t *testing.T) {
+func TestDBRemoveSlot(t *testing.T) {
 	dir := testDirname
 	defer os.RemoveAll(dir)
 	os.RemoveAll(dir)
-	d, err := Open(dir, &Options{
-		CacheSize: 0,
-		FS:        vfs.Default,
-	})
-	require.NoError(t, err)
 
-	key := makeTestKey([]byte("a"))
-	require.NoError(t, d.Set(key, []byte("aa"), nil))
-	require.NoError(t, d.Flush())
-	require.NoError(t, verifyGet(d, key, []byte("aa")))
-	require.NoError(t, d.Close())
+	db := openTestDB(dir)
+	value := utils.FuncRandBytes(1024)
+	for i := 0; i < 5; i++ {
+		key := makeTestIntKey(i)
+		require.NoError(t, db.Set(key, uint16(i), DataTypeString, 0, value))
+	}
+	require.NoError(t, db.FlushVm())
+
+	slotId := uint16(2)
+	require.Equal(t, slotBitupleCreated, db.meta.slotsStatus[slotId])
+	require.NoError(t, db.RemoveSlot(slotId))
+	require.Equal(t, slotBitupleNotCreated, db.meta.slotsStatus[slotId])
+
+	for i := 0; i < 5; i++ {
+		key := makeTestIntKey(i)
+		require.NoError(t, db.Set(key, uint16(i), DataTypeString, 0, value))
+	}
+
+	require.NoError(t, db.Close())
+
+	db = openTestDB(dir)
+	for i := 0; i < 5; i++ {
+		key := makeTestIntKey(i)
+		testGet(t, db, key, uint16(i), value, DataTypeString, 0)
+	}
+	require.Equal(t, slotBitupleCreated, db.meta.slotsStatus[slotId])
+	slotId = uint16(3)
+	require.Equal(t, slotBitupleCreated, db.meta.slotsStatus[slotId])
+	require.NoError(t, db.RemoveSlot(slotId))
+	require.Equal(t, slotBitupleNotCreated, db.meta.slotsStatus[slotId])
+
+	value = utils.FuncRandBytes(1024)
+	for i := 0; i < 5; i++ {
+		key := makeTestIntKey(i)
+		require.NoError(t, db.Set(key, uint16(i), DataTypeString, 0, value))
+	}
+	require.NoError(t, db.Close())
+
+	db = openTestDB(dir)
+	for i := 0; i < 5; i++ {
+		key := makeTestIntKey(i)
+		testGet(t, db, key, uint16(i), value, DataTypeString, 0)
+	}
+	require.NoError(t, db.Close())
 }
 
-func TestLogData(t *testing.T) {
+func TestDBBitupleOpen(t *testing.T) {
+	dir := testDirname
+	defer os.RemoveAll(dir)
+	os.RemoveAll(dir)
+
+	db := openTestDB(dir)
+	for i := 0; i < 3; i++ {
+		key := makeTestIntKey(i)
+		require.NoError(t, db.Set(key, uint16(i), DataTypeString, 0, key))
+	}
+	require.NoError(t, db.Close())
+
+	db = openTestDB(dir)
+	for i, created := range db.meta.slotsStatus {
+		if i < 3 {
+			require.Equal(t, slotBitupleCreated, created)
+		} else {
+			require.Equal(t, slotBitupleNotCreated, created)
+		}
+	}
+	for i := 3; i < 6; i++ {
+		key := makeTestIntKey(i)
+		require.NoError(t, db.Set(key, uint16(i), DataTypeString, 0, key))
+	}
+	require.NoError(t, db.Close())
+
+	db = openTestDB(dir)
+	for i, created := range db.meta.slotsStatus {
+		if i < 6 {
+			require.Equal(t, slotBitupleCreated, created)
+		} else {
+			require.Equal(t, slotBitupleNotCreated, created)
+		}
+	}
+	require.NoError(t, db.Close())
+}
+
+func TestDBSetVmExpire(t *testing.T) {
+	dir := testDirname
+	defer os.RemoveAll(dir)
+	os.RemoveAll(dir)
+
+	db := openTestDB(dir)
+	dt := DataTypeString
+	ts := db.opts.GetNowTimestamp()
+	for i := 0; i < 100; i++ {
+		key := makeTestIntKey(i)
+		if i%2 == 0 {
+			require.NoError(t, db.Set(key, testSlotId, dt, ts+10000, key))
+		} else {
+			require.NoError(t, db.Set(key, testSlotId, dt, ts+1, key))
+		}
+	}
+	time.Sleep(1 * time.Second)
+	require.NoError(t, db.FlushVm())
+	for i := 0; i < 100; i++ {
+		key := makeTestIntKey(i)
+		if i%2 == 0 {
+			testGet(t, db, key, testSlotId, key, dt, ts+10000)
+		} else {
+			testGetNotFound(t, db, key, testSlotId)
+		}
+	}
+
+	require.NoError(t, db.Close())
+}
+
+func testcase(caseFunc func([]bool)) {
+	for _, params := range [][]bool{
+		{true},
+		{false},
+	} {
+		fmt.Printf("testcase params:%v\n", params)
+		caseFunc(params)
+	}
+}
+
+func TestDBWriteRead(t *testing.T) {
+	testcase(func(params []bool) {
+		dir := testDirname
+		defer os.RemoveAll(dir)
+		os.RemoveAll(dir)
+
+		db := openTestDB2(dir, 1, params[0])
+		dt := DataTypeString
+		slotId := testSlotId
+		keyNum := 10000
+		ts := db.opts.GetNowTimestamp() + 10000
+		for i := 0; i < keyNum; i++ {
+			key := makeTestIntKey(i)
+			require.NoError(t, db.Set(key, slotId, dt, ts, key))
+		}
+		for i := 0; i < keyNum; i++ {
+			key := makeTestIntKey(i)
+			testGet(t, db, key, slotId, key, dt, ts)
+		}
+		require.NoError(t, db.FlushVm())
+		for i := 0; i < keyNum; i++ {
+			key := makeTestIntKey(i)
+			testGet(t, db, key, slotId, key, dt, ts)
+		}
+
+		require.NoError(t, db.Close())
+
+		db = openTestDB(dir)
+		for i := 0; i < keyNum; i++ {
+			key := makeTestIntKey(i)
+			testGet(t, db, key, slotId, key, dt, ts)
+		}
+
+		require.NoError(t, db.Close())
+	})
+}
+
+func TestDBVmVtableWrite(t *testing.T) {
+	testcase(func(params []bool) {
+		dir := testDirname
+		defer os.RemoveAll(dir)
+		os.RemoveAll(dir)
+
+		db := openTestDB2(dir, 1, params[0])
+		db.opts.VmTableStopWritesThreshold = 2
+		dt := DataTypeString
+		slotId := testSlotId
+		keyNum := 200
+		vprefix := utils.FuncRandBytes(102400)
+
+		ckDir := filepath.Join(dir, "ck")
+		ckCloser, err := db.Checkpoint(ckDir)
+		require.NoError(t, err)
+
+		for i := 0; i < keyNum/2; i++ {
+			key := makeTestIntKey(i)
+			value := makeTestIntValue(i, vprefix)
+			require.NoError(t, db.Set(key, slotId, dt, 0, value))
+		}
+
+		if ckCloser != nil {
+			ckCloser()
+		}
+
+		for i := keyNum / 2; i < keyNum; i++ {
+			key := makeTestIntKey(i)
+			value := makeTestIntValue(i, vprefix)
+			require.NoError(t, db.Set(key, slotId, dt, 0, value))
+		}
+
+		for i := 0; i < keyNum; i++ {
+			key := makeTestIntKey(i)
+			value := makeTestIntValue(i, vprefix)
+			testGet(t, db, key, slotId, value, dt, 0)
+		}
+
+		require.NoError(t, db.Close())
+
+		db = openTestDB2(dir, 1, params[0])
+		for i := 0; i < keyNum; i++ {
+			key := makeTestIntKey(i)
+			value := makeTestIntValue(i, vprefix)
+			testGet(t, db, key, slotId, value, dt, 0)
+		}
+		require.NoError(t, db.Close())
+	})
+}
+
+func TestDBVmVtableOpen(t *testing.T) {
+	testcase(func(params []bool) {
+		dir := testDirname
+		defer os.RemoveAll(dir)
+		os.RemoveAll(dir)
+
+		db := openTestDB2(dir, 1, params[0])
+		db.opts.VmTableStopWritesThreshold = 2
+		dt := DataTypeString
+		slotId := testSlotId
+		keyNum := 200
+		vprefix := utils.FuncRandBytes(102400)
+
+		ckDir := filepath.Join(dir, "ck")
+		_, err := db.Checkpoint(ckDir)
+		require.NoError(t, err)
+
+		for i := 0; i < keyNum/2; i++ {
+			key := makeTestIntKey(i)
+			value := makeTestIntValue(i, vprefix)
+			require.NoError(t, db.Set(key, slotId, dt, 0, value))
+		}
+
+		vmVtDir := base.MakeVmVtablepath(db.dirname, int(slotId))
+		files, err := db.opts.FS.List(vmVtDir)
+		for _, file := range files {
+			fn := filepath.Join(vmVtDir, file)
+			require.Equal(t, true, os2.IsExist(fn))
+		}
+
+		for i := range db.bituples {
+			bt := db.getBitupleSafe(i)
+			if bt != nil {
+				require.NoError(t, bt.Close())
+			}
+		}
+		db.meta.close()
+		db.fileLock.Close()
+		db.dataDir.Close()
+		db.optspool.Close()
+
+		db = openTestDB2(dir, 1, params[0])
+		for _, file := range files {
+			fn := filepath.Join(vmVtDir, file)
+			require.Equal(t, true, os2.IsNotExist(fn))
+		}
+		require.NoError(t, db.Close())
+	})
+}
+
+func TestDBCheckpoint(t *testing.T) {
 	defer os.RemoveAll(testDirname)
 	os.RemoveAll(testDirname)
-
-	db := openTestDB(testDirname, nil)
-	val := testRandBytes(10)
-	for i := 0; i < 100; i++ {
-		require.NoError(t, db.Set(makeTestIntKey(i), val, NoSync))
+	srcDir := filepath.Join(testDirname, "src")
+	dstDir := filepath.Join(testDirname, "dst")
+	os.MkdirAll(srcDir, 0755)
+	os.MkdirAll(dstDir, 0755)
+	db := openTestDB(srcDir)
+	keyNum := 10
+	kkn := 1000
+	timestamp := db.opts.GetNowTimestamp() + 100000 + 86400*120*1000
+	keyList := sortedkv.MakeKVList(keyNum+10, 100)
+	kkvList := sortedkv.MakeKKVList(keyNum, kkn, DataTypeHash, 10, 10)
+	for i := 0; i < keyNum; i++ {
+		kv := keyList[i]
+		require.NoError(t, db.Set(kv.Key, makeTestKeySlotid(kv.Key), kv.DataType, timestamp, kv.Value))
 	}
-	for i := range db.bitowers {
-		require.NoError(t, db.LogData([]byte("foo"), i, Sync))
-	}
-	require.NoError(t, db.Close())
-
-	db = openTestDB(testDirname, nil)
-	for i := 0; i < 100; i++ {
-		require.NoError(t, verifyGet(db, makeTestIntKey(i), val))
-	}
-	require.NoError(t, db.Close())
-}
-
-func TestDeleteGet(t *testing.T) {
-	dir := testDirname
-	defer os.RemoveAll(dir)
-	os.RemoveAll(dir)
-	d, err := Open(dir, &Options{})
-	require.NoError(t, err)
-
-	key := makeTestKey([]byte("key"))
-	val := []byte("val")
-
-	require.NoError(t, d.Set(key, val, nil))
-	require.NoError(t, verifyGet(d, key, val))
-
-	key2 := makeTestKey([]byte("key2"))
-	val2 := []byte("val2")
-
-	require.NoError(t, d.Set(key2, val2, nil))
-	require.NoError(t, verifyGet(d, key2, val2))
-
-	require.NoError(t, d.Delete(key2, nil))
-	require.NoError(t, verifyGetNotFound(d, key2))
-
-	require.NoError(t, d.Close())
-}
-
-func TestDeleteFlush(t *testing.T) {
-	dir := testDirname
-	defer os.RemoveAll(dir)
-	os.RemoveAll(dir)
-	d, err := Open(dir, &Options{
-		FS: vfs.Default,
-	})
-	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, d.Close())
-	}()
-
-	key := makeTestKey([]byte("key"))
-	valFirst := []byte("first")
-	valSecond := []byte("second")
-	key2 := makeTestKey([]byte("key2"))
-	val2 := []byte("val2")
-
-	require.NoError(t, d.Set(key, valFirst, nil))
-	require.NoError(t, d.Set(key2, val2, nil))
-	require.NoError(t, d.Flush())
-
-	require.NoError(t, d.Set(key, valSecond, nil))
-	require.NoError(t, d.Delete(key2, nil))
-	require.NoError(t, d.Set(key2, val2, nil))
-	require.NoError(t, d.Flush())
-
-	require.NoError(t, d.Delete(key, nil))
-	require.NoError(t, d.Delete(key2, nil))
-	require.NoError(t, d.Flush())
-
-	require.NoError(t, verifyGetNotFound(d, key))
-	require.NoError(t, verifyGetNotFound(d, key2))
-}
-
-func TestUnremovableDelete(t *testing.T) {
-	dir := testDirname
-	defer os.RemoveAll(dir)
-	os.RemoveAll(dir)
-	d, err := Open(dir, &Options{
-		FS: vfs.Default,
-	})
-	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, d.Close())
-	}()
-
-	key := makeTestKey([]byte("key"))
-	valFirst := []byte("valFirst")
-	valSecond := []byte("valSecond")
-
-	require.NoError(t, d.Set(key, valFirst, nil))
-	require.NoError(t, d.Set(key, valSecond, nil))
-	require.NoError(t, d.Flush())
-
-	require.NoError(t, verifyGet(d, key, valSecond))
-
-	require.NoError(t, d.Delete(key, nil))
-	require.NoError(t, d.Flush())
-	require.NoError(t, verifyGetNotFound(d, key))
-}
-
-func TestAsyncFlush(t *testing.T) {
-	dir := testDirname
-	defer os.RemoveAll(dir)
-	os.RemoveAll(dir)
-	db := openTestDB(testDirname, nil)
-	flushed, err := db.AsyncFlush()
-	require.NoError(t, err)
-	if flushed != nil {
-		t.Fatalf("empty flush flushed is not nil")
+	for i := 0; i < keyNum; i++ {
+		kv := kkvList[i]
+		n, err := db.HMSet(kv.Key, makeTestKeySlotid(kv.Key), kv.Kvs...)
+		require.NoError(t, err)
+		require.Equal(t, int64(kkn), n)
 	}
 
-	val := testRandBytes(100)
-	for i := 0; i < 100; i++ {
-		key := makeTestIntKey(i)
-		require.NoError(t, db.Set(key, val, NoSync))
+	require.NoError(t, db.Flush(false))
+	time.Sleep(1 * time.Second)
+	fmt.Println("DirDiskInfo1", db.DirDiskInfo())
+
+	readData := func(d *DB) {
+		for i := 0; i < keyNum; i++ {
+			kv := keyList[i]
+			testGet(t, d, kv.Key, makeTestKeySlotid(kv.Key), kv.Value, kv.DataType, timestamp)
+
+			kv1 := kkvList[i]
+			for j := 0; j < len(kv1.Kvs); j += 2 {
+				v, vcloser, err := d.HGet(kv1.Key, makeTestKeySlotid(kv1.Key), kv1.Kvs[j])
+				require.NoError(t, err)
+				require.Equal(t, kv1.Kvs[j+1], v)
+				vcloser()
+			}
+		}
+	}
+	readData(db)
+
+	ckDir := filepath.Join(srcDir, "ck", "123")
+	ckCloser, err := db.Checkpoint(ckDir)
+	require.NoError(t, err)
+
+	dstDir = filepath.Join(dstDir, "123")
+	cmd := exec.Command("cp", "-rf", ckDir, dstDir)
+	require.NoError(t, cmd.Run())
+
+	db2 := openTestDB(dstDir)
+	readData(db2)
+	fmt.Println("DirDiskInfo2", db2.DirDiskInfo())
+	require.NoError(t, db2.Close())
+
+	ckCloser()
+
+	for i := keyNum; i < keyNum+10; i++ {
+		kv := keyList[i]
+		require.NoError(t, db.Set(kv.Key, makeTestKeySlotid(kv.Key), kv.DataType, timestamp, kv.Value))
+		testGet(t, db, kv.Key, makeTestKeySlotid(kv.Key), kv.Value, kv.DataType, timestamp)
 	}
 
-	flushed, err = db.AsyncFlush()
-	require.NoError(t, err)
-	<-flushed
-
-	for i := 0; i < 100; i++ {
-		key := makeTestIntKey(i)
-		require.NoError(t, verifyGet(db, key, val))
-	}
-
-	require.NoError(t, err)
 	require.NoError(t, db.Close())
 }
 
-func TestAsyncFlushDataAndWrite(t *testing.T) {
-	dir := testDirname
-	defer os.RemoveAll(dir)
-	os.RemoveAll(dir)
-	d, err := Open(dir, &Options{})
-	require.NoError(t, err)
+func TestDBCheckpointAndVtGC(t *testing.T) {
+	defer os.RemoveAll(testDirname)
+	os.RemoveAll(testDirname)
+	srcDir := filepath.Join(testDirname, "src")
+	dstDir := filepath.Join(testDirname, "dst")
+	os.MkdirAll(srcDir, 0755)
+	os.MkdirAll(dstDir, 0755)
+	db := openTestDB(srcDir)
+	keyNum := 10
+	kkn := 1000
+	timestamp := db.opts.GetNowTimestamp() + 100000
+	keyList := sortedkv.MakeKVList(keyNum+10, 100)
+	kkvList := sortedkv.MakeKKVList(keyNum, kkn, DataTypeHash, 10, 10)
+	for i := 0; i < keyNum; i++ {
+		kv := keyList[i]
+		require.NoError(t, db.Set(kv.Key, makeTestKeySlotid(kv.Key), kv.DataType, timestamp, kv.Value))
+	}
+	for i := 0; i < keyNum; i++ {
+		kv := kkvList[i]
+		n, err := db.HMSet(kv.Key, makeTestKeySlotid(kv.Key), kv.Kvs...)
+		require.NoError(t, err)
+		require.Equal(t, int64(kkn), n)
+	}
 
-	d.Set(makeTestKey([]byte("a")), []byte("100"), nil)
-	d.Set(makeTestKey([]byte("b")), []byte("200"), nil)
+	readData := func(d *DB) {
+		for i := 0; i < keyNum; i++ {
+			kv := keyList[i]
+			testGet(t, d, kv.Key, makeTestKeySlotid(kv.Key), kv.Value, kv.DataType, timestamp)
 
-	var val []byte
-	var closer func()
-	for _, k := range [][]byte{[]byte("a"), []byte("b")} {
-		val, closer, err = d.Get(makeTestKey(k))
-		if closer != nil {
-			closer()
+			kv1 := kkvList[i]
+			for j := 0; j < len(kv1.Kvs); j += 2 {
+				v, vcloser, err := d.HGet(kv1.Key, makeTestKeySlotid(kv1.Key), kv1.Kvs[j])
+				require.NoError(t, err)
+				require.Equal(t, kv1.Kvs[j+1], v)
+				vcloser()
+			}
 		}
 	}
 
-	require.NoError(t, d.Flush())
+	readData(db)
 
-	d.Set(makeTestKey([]byte("c")), []byte("300"), nil)
-	d.Set(makeTestKey([]byte("d")), []byte("400"), nil)
+	ckDir := filepath.Join(srcDir, "ck", "123")
+	ckCloser, err := db.Checkpoint(ckDir)
+	require.NoError(t, err)
 
-	for _, k := range [][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d")} {
-		val, closer, err = d.Get(makeTestKey(k))
-		fmt.Println(string(k), string(val))
-		if closer != nil {
-			closer()
-		}
+	db.doVtGC(true)
+
+	readData(db)
+
+	dstDir = filepath.Join(dstDir, "123")
+	cmd := exec.Command("cp", "-rf", ckDir, dstDir)
+	require.NoError(t, cmd.Run())
+
+	db2 := openTestDB(dstDir)
+	readData(db2)
+	require.NoError(t, db2.Close())
+	ckCloser()
+
+	readData(db)
+	for i := keyNum; i < keyNum+10; i++ {
+		kv := keyList[i]
+		require.NoError(t, db.Set(kv.Key, makeTestKeySlotid(kv.Key), kv.DataType, timestamp, kv.Value))
+		testGet(t, db, kv.Key, makeTestKeySlotid(kv.Key), kv.Value, kv.DataType, timestamp)
 	}
 
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
+	require.NoError(t, db.Close())
 }
 
-func TestFlushEmpty(t *testing.T) {
+func TestDBWriteReadConcurrency(t *testing.T) {
 	dir := testDirname
 	defer os.RemoveAll(dir)
 	os.RemoveAll(dir)
-	d, err := Open(dir, &Options{})
+
+	var wKeyIndex, rKeyIndex, readCount atomic.Uint64
+	var wg sync.WaitGroup
+	opts := &Options{
+		LogTag:                     "[test]",
+		Logger:                     DefaultLogger,
+		VectorTableCount:           1,
+		VectorTableHashSize:        5 << 20,
+		GetNowTimestamp:            options.DefaultGetNowTimestamp,
+		MemTableSize:               32 << 20,
+		VmTableSize:                128 << 20,
+		VmTableStopWritesThreshold: 2,
+		BitpageFlushSize:           10 << 20,
+		BitpageSplitSize:           20 << 20,
+	}
+	require.NoError(t, os.MkdirAll(dir, 0775))
+	db, err := Open(dir, opts)
 	require.NoError(t, err)
 
-	require.NoError(t, d.Flush())
-	require.NoError(t, d.Close())
+	closeCh := make(chan struct{})
+	runTime := time.Duration(120) * time.Second
+	readConcurrency := 7
+	wdConcurrency := 3
+	timeNow := uint64(time.Now().UnixMilli())
+	dataType := DataTypeString
+	prefix := utils.FuncRandBytes(200)
+	makeKey := func(i int) []byte {
+		return []byte(fmt.Sprintf("key_%s_%d", prefix, i))
+	}
+	makeTimestamp := func(i int) uint64 {
+		return timeNow + uint64(i)*10000
+	}
+
+	wg.Add(3)
+	go func() {
+		defer func() {
+			wg.Done()
+			fmt.Println("write goroutine exit writeCount=", wKeyIndex.Load())
+		}()
+
+		var wwg sync.WaitGroup
+		for i := 0; i < wdConcurrency; i++ {
+			wwg.Add(1)
+			go func(index int) {
+				defer wwg.Done()
+				for {
+					select {
+					case <-closeCh:
+						return
+					default:
+						j := int(wKeyIndex.Add(1))
+						key := makeKey(j)
+						require.NoError(t, db.Set(key, testSlotId, dataType, makeTimestamp(j), key))
+						rKeyIndex.Add(1)
+						sn := rand.Intn(100) + 10
+						time.Sleep(time.Duration(sn) * time.Microsecond)
+					}
+				}
+			}(i)
+		}
+		wwg.Wait()
+	}()
+
+	go func() {
+		defer func() {
+			defer wg.Done()
+			fmt.Println("get read goroutine exit readCount=", readCount.Load())
+		}()
+		var rgwg sync.WaitGroup
+		for i := 0; i < readConcurrency; i++ {
+			rgwg.Add(1)
+			go func(index int) {
+				defer rgwg.Done()
+				time.Sleep(3 * time.Second)
+				for {
+					select {
+					case <-closeCh:
+						return
+					default:
+						keyIndex := rKeyIndex.Load()
+						if keyIndex < 10000 {
+							time.Sleep(1 * time.Second)
+							continue
+						}
+						j := rand.Intn(int(keyIndex-10000)) + 1
+						key := makeKey(j)
+						testGet(t, db, key, testSlotId, key, dataType, makeTimestamp(j))
+						readCount.Add(1)
+						sn := rand.Intn(10) + 1
+						time.Sleep(time.Duration(sn) * time.Microsecond)
+					}
+				}
+			}(i)
+		}
+		rgwg.Wait()
+	}()
+
+	go func() {
+		ckDstDir := filepath.Join(testDirname, "ck")
+		os.RemoveAll(ckDstDir)
+		defer func() {
+			wg.Done()
+			os.RemoveAll(ckDstDir)
+			fmt.Println("checkpoint goroutine exit...")
+		}()
+
+		for {
+			select {
+			case <-closeCh:
+				return
+			default:
+				time.Sleep(5 * time.Second)
+				ckCloser, err := db.Checkpoint(ckDstDir)
+				require.NoError(t, err)
+				fmt.Println("Checkpoint finish", time.Now())
+				time.Sleep(20 * time.Second)
+				ckCloser()
+				fmt.Println("CheckpointEnd finish", time.Now())
+				require.NoError(t, os.RemoveAll(ckDstDir))
+			}
+		}
+	}()
+
+	time.Sleep(runTime)
+	close(closeCh)
+	wg.Wait()
+
+	fmt.Println("check all key start")
+	end := int(wKeyIndex.Load())
+	for i := 1; i < end; i++ {
+		key := makeKey(i)
+		testGet(t, db, key, testSlotId, key, dataType, makeTimestamp(i))
+	}
+	fmt.Println("check all key end")
+
+	fmt.Printf("GetStats:%+v\n", db.GetStats())
+
+	require.NoError(t, db.Close())
 }
 
-func TestDBConcurrentCommitCompactFlush(t *testing.T) {
-	for _, disableWAL := range []bool{false, true} {
-		t.Run(fmt.Sprintf("disableWAL=%t", disableWAL), func(t *testing.T) {
+func TestDBScanCursor(t *testing.T) {
+	for _, scanNum := range []int{3, 10, 13} {
+		t.Run(fmt.Sprintf("scanNum=%d", scanNum), func(t *testing.T) {
 			dir := testDirname
 			defer os.RemoveAll(dir)
 			os.RemoveAll(dir)
-			d, err := Open(dir, &Options{
-				FS:         vfs.Default,
-				DisableWAL: disableWAL,
-			})
-			require.NoError(t, err)
 
-			const n = 100
-			var wg sync.WaitGroup
-			wg.Add(n)
-			for i := 0; i < n; i++ {
-				go func(i int) {
-					defer wg.Done()
-					_ = d.Set(makeTestIntKey(i), nil, NoSync)
-					var err error
-					switch i % 2 {
-					case 0:
-						err = d.Flush()
-					case 1:
-						_, err = d.AsyncFlush()
-					}
-					require.NoError(t, err)
-				}(i)
+			opts := &Options{
+				Logger:           DefaultLogger,
+				VectorTableCount: 2,
+				GetNowTimestamp:  options.DefaultGetNowTimestamp,
+				VmTableSize:      32 << 20,
+				MemTableSize:     32 << 20,
 			}
-			wg.Wait()
 
-			require.NoError(t, d.Close())
+			db := openTestDBByOpts(dir, opts)
+			dt := DataTypeString
+			keyNum := 100
+			getSlot := func(i int) uint16 {
+				return uint16(i % 10)
+			}
+
+			for i := 0; i < keyNum; i++ {
+				key := makeTestIntKey(i)
+				require.NoError(t, db.Set(key, getSlot(i), dt, 0, key))
+			}
+
+			require.NoError(t, db.FlushVm())
+
+			var cursor []byte
+			var res [][]byte
+			keyMap := make(map[string]bool, keyNum)
+
+			i := 1
+			for {
+				cursor, res, _ = db.Scan(cursor, scanNum, 0, func(string) bool { return true })
+				i++
+				for _, k := range res {
+					keyMap[string(k)] = true
+				}
+				if len(res) == 0 || bytes.Equal(cursor, []byte("0")) {
+					break
+				}
+			}
+
+			for j := 0; j < keyNum; j++ {
+				key := makeTestIntKey(j)
+				v, ok := keyMap[string(key)]
+				require.True(t, ok)
+				require.Equal(t, true, v)
+			}
+
+			require.NoError(t, db.Close())
 		})
 	}
 }
 
-func TestDBApplyBatchMismatch(t *testing.T) {
+func TestDBScan(t *testing.T) {
 	dir := testDirname
 	defer os.RemoveAll(dir)
 	os.RemoveAll(dir)
-	srcDB, err := Open(dir, &Options{
-		FS: vfs.Default,
-	})
-	require.NoError(t, err)
 
-	dir1 := testDirname + "1"
-	defer os.RemoveAll(dir1)
-	os.RemoveAll(dir1)
-	applyDB, err := Open(dir1, &Options{
-		FS: vfs.Default,
-	})
-	require.NoError(t, err)
-
-	b := srcDB.NewBatch()
-	b.Set(makeTestKey([]byte("test")), nil, nil)
-
-	err = applyDB.Apply(b, nil)
-	if err == nil || !strings.Contains(err.Error(), "batch db mismatch:") {
-		t.Fatalf("expected error, but found %v", err)
+	db := openTestDB(dir)
+	dt := DataTypeString
+	ts := db.opts.GetNowTimestamp() + 10000
+	keyNum := 100
+	getSlot := func(i int) uint16 {
+		return uint16(i % 10)
 	}
 
-	require.NoError(t, srcDB.Close())
-	require.NoError(t, applyDB.Close())
-}
+	for i := 0; i < keyNum; i++ {
+		key := makeTestIntKey(i)
+		require.NoError(t, db.Set(key, getSlot(i), dt, ts, key))
+	}
 
-func TestMetaFlushBitable(t *testing.T) {
-	defer os.RemoveAll(testDirname)
-	os.RemoveAll(testDirname)
+	require.NoError(t, db.FlushVm())
 
-	testOptsUseBitable = true
-	db := openTestDB(testDirname, nil)
-	require.Equal(t, uint8(0), db.meta.meta.GetFieldFlushedBitable())
-	require.Equal(t, false, db.isFlushedBitable())
-	db.setFlushedBitable()
-	require.Equal(t, uint8(1), db.meta.meta.GetFieldFlushedBitable())
-	require.Equal(t, true, db.isFlushedBitable())
-	require.NoError(t, db.Close())
-	testOptsUseBitable = true
-	db = openTestDB(testDirname, nil)
-	require.Equal(t, uint8(1), db.meta.meta.GetFieldFlushedBitable())
-	require.Equal(t, true, db.isFlushedBitable())
+	cursor, res, _ := db.Scan(nil, keyNum+1, dt, func(string) bool { return true })
+	require.Equal(t, keyNum, len(res))
+	require.Equal(t, []byte("0"), cursor)
+
+	keyMap := make(map[string]struct{}, len(res))
+	for _, k := range res {
+		keyMap[string(k)] = struct{}{}
+	}
+
+	for i := 0; i < keyNum; i++ {
+		key := makeTestIntKey(i)
+		_, ok := keyMap[string(key)]
+		require.True(t, ok)
+	}
+
 	require.NoError(t, db.Close())
 }

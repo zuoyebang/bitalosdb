@@ -18,7 +18,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/zuoyebang/bitalosdb/internal/bytepools"
+	"github.com/zuoyebang/bitalosdb/v2/internal/bytepools"
 )
 
 type InternalKeyKind uint8
@@ -29,11 +29,18 @@ const (
 	InternalKeyKindSetBithash   InternalKeyKind = 2
 	InternalKeyKindLogData      InternalKeyKind = 3
 	InternalKeyKindPrefixDelete InternalKeyKind = 4
+	InternalKeyKindExpireAt     InternalKeyKind = 5
 	InternalKeyKindMax          InternalKeyKind = 18
 	InternalKeyKindInvalid      InternalKeyKind = 255
 
-	InternalKeySeqNumBatch = uint64(1 << 55)
-	InternalKeySeqNumMax   = uint64(1<<56 - 1)
+	InternalKeySeqNumMax = uint64(1<<56 - 1)
+)
+
+const (
+	InternalValueKindSet     = 0
+	InternalValueKindBithash = 1
+
+	InternalValueBithashSize = 13
 )
 
 var internalKeyKindNames = []string{
@@ -134,11 +141,6 @@ func (k InternalKey) SeqNum() uint64 {
 	return k.Trailer >> 8
 }
 
-func (k InternalKey) Visible(snapshot uint64) bool {
-	seqNum := k.SeqNum()
-	return seqNum <= snapshot || (seqNum&InternalKeySeqNumBatch) != 0
-}
-
 func (k *InternalKey) SetKind(kind InternalKeyKind) {
 	k.Trailer = (k.Trailer &^ 0xff) | uint64(kind)
 }
@@ -165,19 +167,6 @@ func (k InternalKey) String() string {
 	return fmt.Sprintf("%s#%d,%d", FormatBytes(k.UserKey), k.SeqNum(), k.Kind())
 }
 
-func (k InternalKey) Pretty(f FormatKey) fmt.Formatter {
-	return prettyInternalKey{k, f}
-}
-
-type prettyInternalKey struct {
-	InternalKey
-	formatKey FormatKey
-}
-
-func (k prettyInternalKey) Format(s fmt.State, c rune) {
-	fmt.Fprintf(s, "%s#%d,%s", k.formatKey(k.UserKey), k.SeqNum(), k.Kind())
-}
-
 type InternalValue struct {
 	Header    uint64
 	UserValue []byte
@@ -185,10 +174,6 @@ type InternalValue struct {
 
 func (v InternalValue) Kind() InternalKeyKind {
 	return InternalKeyKind(v.Header & 0xff)
-}
-
-func (v *InternalValue) SetSeqNum(seqNum uint64) {
-	v.Header = (seqNum << 8) | (v.Header & 0xff)
 }
 
 func (v *InternalValue) SetKind(kind InternalKeyKind) {
@@ -216,28 +201,48 @@ func EncodeInternalValue(value []byte, seqNum uint64, kind InternalKeyKind) ([]b
 	return pool[:vLen], closer
 }
 
-func DecodeInternalValue(encodedValue []byte) InternalValue {
-	n := len(encodedValue) - 8
+func DecodeInternalValue(value []byte) (bool, []byte, InternalValue) {
+	if len(value) < InternalValueBithashSize {
+		return false, value, InternalValue{}
+	}
+
+	if value[0] == InternalValueKindSet {
+		return false, value[1:], InternalValue{}
+	}
+
+	value = value[1:]
+	n := len(value) - 8
 	var header uint64
 	if n >= 0 {
-		header = binary.LittleEndian.Uint64(encodedValue[0:8])
+		header = binary.LittleEndian.Uint64(value[0:8])
 		if n == 0 {
-			encodedValue = encodedValue[:0:0]
+			value = value[:0:0]
 		} else {
-			encodedValue = encodedValue[8 : n+8 : n+8]
+			value = value[8 : n+8 : n+8]
 		}
 	} else {
 		header = uint64(InternalKeyKindInvalid)
-		encodedValue = nil
+		value = nil
 	}
 
-	return InternalValue{
+	return true, nil, InternalValue{
 		Header:    header,
-		UserValue: encodedValue,
+		UserValue: value,
 	}
 }
 
-func CheckValueValidByKeySetBithash(v []byte) bool {
-	length := len(v)
-	return length == 4 || length == 12
+func EncodeTrailer(seqNum uint64, kind InternalKeyKind) uint64 {
+	return (seqNum << 8) | uint64(kind)
+}
+
+func DecodeTrailer(trailer uint64) (uint64, InternalKeyKind) {
+	return trailer >> 8, InternalKeyKind(trailer & 0xff)
+}
+
+func DecodeKind(trailer uint64) InternalKeyKind {
+	return InternalKeyKind(trailer & 0xff)
+}
+
+func CheckValueBithashValid(v []byte) bool {
+	return len(v) == 4
 }
