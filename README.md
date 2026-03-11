@@ -4,27 +4,31 @@
 
 ## Introduction
 
-- Bitalosdb is a high-performance KV storage engine (self-developed), which is based on the creative IO architecture and storage technology and focuses on solving the problem of LSM-Tree read and write amplification. As a substitute for Rocksdb, Bitalosdb can improve read and write performance greatly.
+- High-performance KV storage engine based on a brand-new I/O architecture and storage technology, focusing on solving the read and write amplification issues of LSM-Tree. As an alternative to RocksDB, both read and write performance have been greatly improved.
 
-## Team
+## Main Creator
 
-- Produced: Zuoyebang Company - Platform technical team
-
-- Author: Xu Ruibo(hustxurb@163.com)
+- Author: Xu Ruibo(hustxurb@163.com), joined Zuoyebang in December 2018 (working till now), is responsible for live class middle platform and Zuoyebang platform, and leads the storage technology team to develop Bitalos from 0 to 1.
 
 - Contributors: Xing Fu(wzxingfu@gmail.com), Li Jingchen(cokin.lee@outlook.com), Lu Wenwei(422213023@qq.com), Liu Fang(killcode13@sina.com)
 
 ## Key Technology
 
-- Bithash (KV separation technology), significantly reduce write amplification. For bithash, time complexity of retrieval is O(1). GC can be completed independently, and value and index are decoupled.
+- High-performance compressed indexing technology: bitalostree, a B+ tree based on ultra-large pages, with innovative index compression technology that eliminates write amplification of B+ trees and maximizes read performance.
 
-- Bitalostree (high-performance compression index technology), basically eliminate read amplification. If B+ Tree has a number of huge Pages, write amplification is a severe problem. With a creative index compression technology, Bitalostree eliminates B+ Tree write amplification, and improves the read performance.
+- High-performance KV index with vector computation implemented based on ASM assembly, delivering significantly improved performance.
 
-- Bitalostable (cold and hot data separation technology), stores cold data, which is calculated according to the data scale and access frequency. Storage engine writes cold data to Bitalostable when QPS becomes low. Improve data compression, reduce index memory consumption, and achieve more rational resource utilization. (open source stable edition has basic features, enterprise edition supports more comprehensive hot and cold separation).
+- High-performance K-KV index, a multi-level vector index based on bitalostree that balances index compression ratio and retrieval performance.
+
+- High-performance KV separation technology: bithash, based on a compact index structure, with O(1) retrieval efficiency and capable of independent GC.
+
+- High-performance storage structure that compresses Redis composite data types, significantly reducing I/O costs and improving system throughput.
+
+- Hot-cold data separation technology: bitalostable, which supports cold data storage, improves data compression ratio, reduces index memory consumption, and achieves more reasonable resource utilization (the open-source stable version provides basic functions, while the enterprise edition supports more comprehensive hot-cold separation).
 
 ## Performance
 
-- This benchmark is based on Bitloasdb version (v5.0) and rocksdb stable version (v7.6.0).
+- As an alternative to RocksDB, BitalosDB was benchmarked against the stable version of RocksDB released in the same period.
 
 ### Hardware
 
@@ -71,10 +75,10 @@ Cache：disable
 
 ### Result
 
-- QPS ([Horizontal](./docs/benchmark-qps.png))
+- QPS
 
-![benchmark](./docs/benchmark-qps-vertical.png)
+![benchmark](./docs/benchmark-qps.png)
 
 ## Document
 
-Technical architecture and documentation, refer to the official website: bitalos.zuoyebang.com (Building...)
+Technical architecture and documentation, refer to the official website: bitalos.zuoyebang.com
