@@ -2,26 +2,30 @@
 
 ## 简介
 
-- 高性能KV存储引擎（自研），基于全新IO架构及存储技术，重点解决LSM-Tree的读写放大问题。作为rocksdb的替代品，读写性能均有大幅提升。
+- 高性能KV存储引擎，基于全新IO架构及存储技术，重点解决LSM-Tree的读写放大问题。作为rocksdb的替代品，读写性能均有大幅提升。
 
-## 出品
-
-- 团队：作业帮-平台技术团队
+## 主创
 
 - 作者：徐锐波(hustxurb@163.com)
 
 - 贡献者：幸福(wzxingfu@gmail.com)、李景晨(cokin.lee@outlook.com)、卢文伟(422213023@qq.com)、刘方(killcode13@sina.com)
 
 ## 关键技术
-- Bithash（KV分离技术），显著改善写放大；具备O(1)检索效率，可独立完成GC，实现value与index解耦。
+- 高性能压缩索引技术：bitalostree，基于超大page的b+ tree，创造性的索引压缩技术，消除b+ tree的写放大，并将读性能发挥到极致.
 
-- Bitalostree（高性能压缩索引技术），基本消除读放大；基于超大Page的B+ Tree，运用全新的索引压缩技术，消除B+ Tree的写放大，并将读性能发挥到极致。
+- 高性能KV索引，基于ASM汇编实现向量计算，性能显著提升.
 
-- Bitalostable（冷热数据分离技术），承载冷数据存储，根据数据规模及访问频度，计算相对冷数据，流量低峰时转存至Bitalostable；提升数据压缩率，减少索引内存消耗，实现更合理的资源利用（开源稳定版具备基础功能，企业版支持更全面的冷热分离）。
+- 高性能K-KV索引，基于bitalostree的多级向量索引，兼顾索引压缩率与检索性能.
+
+- 高性能KV分离技术：bithash，基于紧凑型索引结构，具备O(1)检索效率，可独立完成GC.
+
+- 高性能存储结构，压缩redis复合数据类型，大幅降低IO成本，提升系统吞吐.
+
+- 冷热数据分离技术:bitalostable，承载冷数据存储，提升数据压缩率，减少索引内存消耗，实现更合理的资源利用（开源稳定版具备基础功能，企业版支持更全面的冷热分离）.
 
 ## 性能报告
 
-- bitalosdb在性能上持续精进，此次性能测试基于bitalosdb v5.0；作为rocksdb的替代品，选取同时期rocksdb稳定版做性能对比。
+- bitalosdb作为rocksdb的替代品，选取同时期rocksdb稳定版做性能对比。
 
 ### 硬件
 
@@ -74,4 +78,4 @@ Cache：disable
 
 ## 文档
 
-- 技术架构及文档，参考官网：bitalos.zuoyebang.com（建设中...）
+- 技术架构及文档，参考官网：bitalos.zuoyebang.com
