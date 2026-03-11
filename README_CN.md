@@ -6,7 +6,7 @@
 
 ## 主创
 
-- 作者：徐锐波(hustxurb@163.com)
+- 作者：徐锐波(hustxurb@163.com)，2018年12月加入作业帮，在职至今，先后负责直播课中台研发及作业帮平台研发；同时带领存储技术团队，从0到1研发Bitalos
 
 - 贡献者：幸福(wzxingfu@gmail.com)、李景晨(cokin.lee@outlook.com)、卢文伟(422213023@qq.com)、刘方(killcode13@sina.com)
 
@@ -72,9 +72,9 @@ Cache：disable
 
 ### 结果
 
-- QPS ([Horizontal](./docs/benchmark-qps.png))
+- QPS
 
-![benchmark](./docs/benchmark-qps-vertical.png)
+![benchmark](./docs/benchmark-qps.png)
 
 ## 文档
 
