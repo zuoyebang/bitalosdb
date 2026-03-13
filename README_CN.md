@@ -25,7 +25,7 @@
 
 ## 性能报告
 
-- bitalosdb作为rocksdb的替代品，选取同时期rocksdb稳定版做性能对比。
+- bitalosdb作为rocksdb的替代品，选取 2025年10月发布的bitalosdb 与 2026年2月发布的rocksdb v10.10.1 做性能对比。
 
 ### 硬件
 
@@ -41,8 +41,6 @@ Disk:   2*3.5TB NVMe SSD
 
 - CPU限制：8核
 
-- 对比标准：多核压测QPS换算成单核QPS对比，单核性能更能体现成本优势
-
 ### 数据
 
 - 单条数据：key-size：32B、value-size：1KB
@@ -54,19 +52,18 @@ Disk:   2*3.5TB NVMe SSD
 - rocksdb
 
 ```
-Memtable：256MB
-WAL：enable
+Memtable：1GB
+WAL：disable
 Cache：8GB
-TargetFileSize：256M
-L0CompactTrigger：8
-L0StopWritesTrigger：24
+TargetFileSize：128MB
+MinBlobSize：256B
 ```
 
 - bitalosdb
 
 ```
-Memtable：256MB
-WAL：enable
+Memtable：1GB
+WAL：disable
 Cache：disable
 ```
 
@@ -74,7 +71,7 @@ Cache：disable
 
 - QPS
 
-![benchmark](./docs/benchmark-qps.png)
+![benchmark](./docs/benchmark-bitalosdb-qps.png)
 
 ## 文档
 

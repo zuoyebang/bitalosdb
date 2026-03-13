@@ -28,7 +28,7 @@
 
 ## Performance
 
-- As an alternative to RocksDB, BitalosDB was benchmarked against the stable version of RocksDB released in the same period.
+- As an alternative to RocksDB, we compared the performance of BitalosDB released in October 2025 with RocksDB v10.10.1 released in February 2026.
 
 ### Hardware
 
@@ -44,8 +44,6 @@ Disk:   2*3.5TB NVMe SSD
 
 - Program cpu cgroup: 8 core
 
-- Comparison standard: QPS on single-core (multi-core QPS / core number), single-core performance reflects cost advantage better.
-
 ### Data
 
 - Key-value spec: key-size=32B、value-size=1KB
@@ -57,19 +55,18 @@ Disk:   2*3.5TB NVMe SSD
 - rocksdb
 
 ```
-Memtable：256MB
-WAL：enable
+Memtable：1GB
+WAL：disable
 Cache：8GB
-TargetFileSize：256M
-L0CompactTrigger：8
-L0StopWritesTrigger：24
+TargetFileSize：128MB
+MinBlobSize：256B
 ```
 
 - bitalosdb
 
 ```
-Memtable：256MB
-WAL：enable
+Memtable：1GB
+WAL：disable
 Cache：disable
 ```
 
@@ -77,8 +74,8 @@ Cache：disable
 
 - QPS
 
-![benchmark](./docs/benchmark-qps.png)
+![benchmark](./docs/benchmark-bitalosdb-qps.png)
 
 ## Document
 
-Technical architecture and documentation, refer to the official website: bitalos.zuoyebang.com
+- Technical architecture and documentation, refer to the official website: bitalos.zuoyebang.com
